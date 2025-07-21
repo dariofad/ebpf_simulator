@@ -54,6 +54,7 @@ probe_bpf*
 # modules' binaries
 cps_tracer
 cps_monitor
+cps_falsifier
 
 # vmlinux
 vmlinux.h

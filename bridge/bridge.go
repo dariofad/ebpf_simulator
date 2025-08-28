@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	"github.com/vmihailenco/msgpack/v5"
 	"io"
 	"log"
 	"net"
@@ -31,19 +31,18 @@ func main() {
 func handleConnection(conn net.Conn) {
 
 	defer conn.Close()
-	err := conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	err := conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	if err != nil {
 		log.Println("ReadDeadline set error:", err)
 		return
 	}
 
-	var rawJson []byte
+	var rawData []byte
 	chunk := make([]byte, 16)
 
 	for {
 		n, err := conn.Read(chunk)
-		rawJson = append(rawJson, chunk[:n]...)
-		//log.Println(string(chunk[:n]))
+		rawData = append(rawData, chunk[:n]...)
 		if err != nil {
 			if err == io.EOF {
 				log.Println("io.EOF reached")
@@ -53,14 +52,14 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 	}
-	rawJson = bytes.Trim(rawJson, "\x00")
 	payload := make(map[string]interface{})
-	err = json.Unmarshal(rawJson, &payload)
+	dec := msgpack.NewDecoder(bytes.NewReader(rawData))
+	err = dec.Decode(&payload)
 	if err != nil {
 		log.Println("Invalid json:", err)
 	} else {
-		log.Println("Payload recovered, %d bytes", len(rawJson))
-		//log.Println(string(rawJson))
+		log.Println("Payload recovered, %d bytes", len(rawData))
+		// log.Println(payload)
 	}
 
 	// response := []byte{0x1}

@@ -16,16 +16,17 @@ function [] = fsend(datapoints)
         );
 
     % serialization (bottleneck)
-    jsondata = jsonencode(data);
+    %payload = jsonencode(data);
+    payload = msgpack('pack', data);
     display("data serialized, size in MB:");
     display([ ...
         'serialized data size ', ...
-        num2str(whos('jsondata').bytes / (1024 * 1024)), ...
+        num2str(whos('payload').bytes / (1024 * 1024)), ...
         'MB']);
 
     % send data to the server
     client = tcpclient(GUEST_IP, PORT);
-    write(client, jsondata);
+    write(client, payload);
 
     % wait for the response
     % while client.NumBytesAvailable == 0

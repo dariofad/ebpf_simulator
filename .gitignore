@@ -58,3 +58,6 @@ cps_falsifier
 
 # vmlinux
 vmlinux.h
+
+# matlab autosave files
+*.asv

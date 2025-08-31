@@ -1,43 +1,55 @@
 function [] = fsend(datapoints)
 
-    t1 = cputime;
+    startTime = tic;
+
+    display(['more than ', num2str(datapoints), ' datapoints']);
 
     % server configuration
     %GUEST_IP = '192.168.56.102';
     GUEST_IP = '127.0.0.1';
     PORT = 8080;
+    TIMEOUT = 30;
     
     % example data
-    distance = linspace(1, 1, datapoints);
-    speed = linspace(2,2, datapoints);
+    X1 = linspace(1, 1, datapoints);
+    X2 = linspace(2,2, datapoints);
     data = struct( ...
-        "distance",distance, ...
-        "speed", speed ...
+        "X1", X1, ...
+        "X2", X2 ...
         );
+    display('data created');
 
-    % serialization (bottleneck)
+    % serialization
     %payload = jsonencode(data);
-    payload = msgpack('pack', data);
-    display("data serialized, size in MB:");
-    display([ ...
-        'serialized data size ', ...
-        num2str(whos('payload').bytes / (1024 * 1024)), ...
-        'MB']);
+    serData = msgpack('pack', data);
+    display('data serialized');
 
     % send data to the server
-    client = tcpclient(GUEST_IP, PORT);
-    write(client, payload);
+    client = tcpclient(GUEST_IP, PORT, 'Timeout', TIMEOUT);
+    % size
+    dataLen = uint32(whos('serData').bytes);
+    display(['sending ', num2str(dataLen), ' bytes']);
+    write(client, swapbytes(dataLen), 'uint32');
+    % data
+    write(client, serData);
+    display('data sent');
 
-    % wait for the response
-    % while client.NumBytesAvailable == 0
-    %     pause(0.1);
-    % end
-    % response = read(client, 1, "uint8");
-    % display(response);
+    % get the response from the server
+    respLen = swapbytes(read(client, 1, 'uint32'));
+    display(['receiving ', num2str(respLen), ' bytes']);
+
+    % Read exact number of bytes for response
+    response = read(client, respLen);
+
+    % Decode response
+    display('response received'); 
+    result = msgpack('unpack', response);
+    display('response deserialized');
+
 
     % clear the client
     clear client;
 
-    t2 = cputime;
-    display(['Elapsed time ', num2str(t2 - t1), ' seconds']);
+    elapsedTime = toc(startTime);
+    display([num2str(elapsedTime), ' seconds elapsed']);
 end

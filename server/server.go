@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dariofad/ebpf_simulator/simulator"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -184,6 +185,7 @@ func handleConnection(conn net.Conn) {
 	_ = data
 
 	// ... RUN THE SIMULATION WITH eBPF HERE...
+	go simulator.Run()
 
 	// create a mock result
 	result := Result{

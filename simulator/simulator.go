@@ -33,16 +33,16 @@ func Run() {
 	}
 
 	// Get the binary path
-	rawBinPath, err := os.ReadFile(".BIN_PATH")
+	rawBinPath, err := os.ReadFile("simulator/.BIN_PATH")
 	if err != nil {
-		log.Fatal("Error setting the ACC path")
+		log.Fatal("Error setting the dualACC")
 		panic(err)
 	}
 	binPath := string(rawBinPath)
 	log.Println("ACC binary path:", binPath)
 
 	// Get the symbol name
-	rawSymbol, err := os.ReadFile(".BIN_SYM")
+	rawSymbol, err := os.ReadFile("simulator/.BIN_SYM")
 	if err != nil {
 		log.Fatal("Error setting the symbol name")
 
@@ -51,7 +51,7 @@ func Run() {
 	log.Println("ACC symbol name:", symbol)
 
 	// Get the addresses
-	rawAddrs, err := os.ReadFile(".ADDRS.json")
+	rawAddrs, err := os.ReadFile("simulator/.ADDRS.json")
 	if err != nil {
 		log.Fatal("Error reading addresses")
 	}

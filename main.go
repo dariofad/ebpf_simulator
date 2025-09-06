@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dariofad/ebpf_simulator/server"
+	"github.com/dariofad/ebpf_simulator/simulator"
 )
 
 var VERBOSE bool
@@ -18,6 +19,7 @@ func main() {
 
 	parseCmdLineOptions()
 	configureLogger()
+	simulator.RemoveMemlock()
 	server.StartServer(PORT)
 	// todo handle requests to stop the server
 }

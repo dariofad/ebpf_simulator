@@ -21,6 +21,13 @@ volatile const __u32 MAX_CYCLES;
 // signals
 const __u16 SIGKILL = 9;
 
+// maps
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, __u32);
+	__type(value, __u64); // use a u64 to store a double value
+} d_rel_map SEC(".maps");
+
 SEC("uretprobe/drel_probe")
 int uprobe_drel_probe() {
 
@@ -34,25 +41,25 @@ int uprobe_drel_probe() {
 	if (cycle > MAX_CYCLES) {
 		bpf_printk("SIGKILL sent to process");
 		bpf_send_signal(SIGKILL);
+		return 0;
 	}
-	if (isMajor) {
-		// overwrite userspace memory
-		// todo add
+        if (isMajor) {
+		__u32 d_rel_key = cycle - 1;
+		// read d_rel from input trace
+		__u64 *d_rel = bpf_map_lookup_elem(&d_rel_map, &d_rel_key);
+		if (!d_rel){
+			bpf_printk("Error reading d_rel_p");
+			return 0;
+		}
+		bpf_printk("d_rel at idx %u: %llu", d_rel_key, *d_rel);
+		// overwrite d_rel in userspace memory
+		long err = bpf_probe_write_user((void *)(ADDR_BASE+ADDR_OBJ+ADDR_DREL), d_rel, 8);
+		if (err != 0) {
+			bpf_printk("UWRITE FAILED (d_rel_i): %ld\n", err);
+			return 0;
+		}		
 	}
 
-	
-
-	// todo overwrite value
-	/* // overwriting a memory location of a process executing a simulink model */
-        /* __s64 val_to_write = 0; */
-	/* err = bpf_probe_write_user((void *)(ADDR_BASE+ADDR_OBJ+ADDR_DREL), &val_to_write, sizeof(val_to_write)); */
-	/* if (err != 0) { */
-	/* 	bpf_printk("UWRITE FAILED: %ld\n", err); */
-	/* 	return 0; */
-        /* } else { */
-	/* 	bpf_printk("d_rel overwritten\n"); */
-        /* } */
-	
 	return 0;
 }
 

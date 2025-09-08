@@ -103,12 +103,34 @@ func Run(data map[string]interface{}) {
 		log.Fatalf("setting variable: %s", err)
 	}
 
-	// Load pre-compiled programs and maps into the kernel
-	var objs probePrograms
-	if err := spec.LoadAndAssign(&objs, nil); err != nil {
-		log.Fatalf("loading programs: %s", err)
+	// fix the spec for the d_rel_map
+	dRelMapSpec, ok := spec.Maps["d_rel_map"]
+	if !ok {
+		log.Print("Cannot get the d_rel map spec")
+		return
 	}
-	defer objs.Close()
+	dRelMapSpec.MaxEntries = MAX_CYCLES
+
+	// load eBPF objects (maps + programs) into the kernel
+	probeObjs := probeObjects{}
+	if err := spec.LoadAndAssign(&probeObjs, nil); err != nil {
+		log.Printf("Cannot load eBPF objects, err: %v", err)
+		return
+	}
+	defer probeObjs.Close()
+
+	// Inject datapoints
+	// todo: use correct datapoints instead of testing values
+	// todo: reduce map creation using a batch insertion
+	for i := 0; i < int(MAX_CYCLES); i++ {
+		mkey := uint32(i)
+		mval := float64(i)
+		log.Println(mval)
+		if err := probeObjs.D_relMap.Put(&mkey, &mval); err != nil {
+			log.Printf("Cannot put value into d_rel map, err: %v", err)
+			return
+		}
+	}
 
 	// Open an ELF binary and read its symbols
 	ex, err := link.OpenExecutable(binPath)
@@ -117,7 +139,7 @@ func Run(data map[string]interface{}) {
 	}
 
 	// Link the uprobe
-	uprobe, err := ex.Uprobe(symbol, objs.UprobeDrelProbe, &link.UprobeOptions{Offset: OFFSET})
+	uprobe, err := ex.Uprobe(symbol, probeObjs.UprobeDrelProbe, &link.UprobeOptions{Offset: OFFSET})
 	if err != nil {
 		log.Fatal("cannot set the uprobe")
 		return
@@ -126,6 +148,8 @@ func Run(data map[string]interface{}) {
 
 	// Run the simulation and wait until it terminates
 	binCmd := exec.Command(binPath)
+	binCmd.Stdout = os.Stdout
+	binCmd.Stderr = os.Stderr
 	log.Println("Starting simulation")
 	err = binCmd.Run()
 	if err != nil {

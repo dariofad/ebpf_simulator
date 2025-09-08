@@ -40,6 +40,7 @@ To get obtain these addresses you can use GDB:
     inspect the process memory: it will be the first address you see,
     feel free to use this one liner `pmap $(ps -aux | grep "dualACC" | awk 'NR==1{ print $2}')`
 10. To get the offset, run `info line info line egoCar.cpp:2298`	
+11. To get the additional address of `isMajorTime`, use `p &ego.egoCar_M.isMajorTimeStep` (and calculate it accordingly)
 
 ## Reproduce
 

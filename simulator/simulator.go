@@ -60,12 +60,13 @@ func Run(data map[string]interface{}) {
 	ADDR_BASE, e1 := strconv.ParseUint(addrs["ADDR_BASE"], 16, 64)
 	ADDR_OBJ, e2 := strconv.ParseUint(addrs["ADDR_OBJ"], 16, 64)
 	ADDR_DREL, e3 := strconv.ParseUint(addrs["ADDR_DREL"], 16, 64)
-	OFFSET, e4 := strconv.ParseUint(addrs["OFFSET"], 10, 64) // NB, base 10
-	if e1 != nil || e2 != nil || e3 != nil || e4 != nil {
-		log.Fatalf("Error converting the addresses e1=%v, e2=%v, e3=%v, e4=%v\n ", e1, e2, e3, e4)
+	OFFSET, e4 := strconv.ParseUint(addrs["OFFSET"], 10, 64)                             // base 10
+	MINOR_TO_MAJOR_RATIO, e5 := strconv.ParseUint(addrs["MINOR_TO_MAJOR_RATIO"], 10, 64) // base 10
+	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || e5 != nil {
+		log.Fatalf("Error converting the addresses e1=%v, e2=%v, e3=%v, e4=%v, e5=%v\n ", e1, e2, e3, e4, e5)
 	}
 
-	// Set the addresses in the spec
+	// Set values in the spec
 	if err = spec.Variables["ADDR_BASE"].Set(ADDR_BASE); err != nil {
 		log.Fatalf("setting variable: %s", err)
 	}
@@ -73,6 +74,9 @@ func Run(data map[string]interface{}) {
 		log.Fatalf("setting variable: %s", err)
 	}
 	if err = spec.Variables["ADDR_DREL"].Set(ADDR_DREL); err != nil {
+		log.Fatalf("setting variable: %s", err)
+	}
+	if err = spec.Variables["MINOR_TO_MAJOR_RATIO"].Set(uint32(MINOR_TO_MAJOR_RATIO)); err != nil {
 		log.Fatalf("setting variable: %s", err)
 	}
 
@@ -90,6 +94,7 @@ func Run(data map[string]interface{}) {
 			return
 		}
 		MAX_CYCLES = uint32(numPoints)
+		log.Printf("Found %d datapoints", MAX_CYCLES)
 	} else {
 		log.Print("Cannot detect the number of datapoints")
 		return

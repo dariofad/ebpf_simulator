@@ -13,12 +13,6 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
-// mock result struct
-type Result struct {
-	Y    []float64 `msgpack:"Y"`
-	YErr []float64 `msgpack:"YError"`
-}
-
 var VERBOSE bool
 
 func StartServer(port uint16) {
@@ -116,7 +110,7 @@ func deserialize(rawData []byte) (map[string]interface{}, error) {
 }
 
 // Serializes a result using MessagePack
-func serialize(result Result) (*bytes.Buffer, error) {
+func serialize(result simulator.Result) (*bytes.Buffer, error) {
 
 	defer timeTrack(time.Now(), "serialize()")
 
@@ -185,20 +179,19 @@ func handleConnection(conn net.Conn) {
 	_ = data
 
 	// ... RUN THE SIMULATION WITH eBPF HERE...
-	go simulator.Run(data)
-
-	// create a mock result
-	result := Result{
-		Y:    make([]float64, 10),
-		YErr: []float64{0.001, -0.35},
+	var result *simulator.Result
+	result, err = simulator.Run(data)
+	if err != nil {
+		log.Println("Simulation resulted in an err:", err)
+		return
 	}
-	log.Println("Mock result created")
+	log.Println("Simulation result created")
 	if VERBOSE {
-		log.Println(result)
+		log.Println(*result)
 	}
 
 	// serialize result
-	response, err := serialize(result)
+	response, err := serialize(*result)
 	if err != nil {
 		return
 	}

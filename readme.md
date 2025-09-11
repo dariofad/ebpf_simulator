@@ -1,15 +1,14 @@
 # eBPF-enabled falsification
 
-This repository demonstrates how to search for counterexamples (i.e.,
-falsification) with eBPF.
+This repository implements a Go TCPIP server capable of running Simulink models with online perturbation.
+This supports multiple objectives, including searching for counterexamples (i.e.,
+falsification) online, monitoring models, changing model behavior at runtime.
 
 Follow the prerequisites to reproduce.
 
-## Instructions to reproduce
+## Prerequisites
 
-Platform: Ubuntu 24.04 LTS (kernel newer than v5.7)
-
-### Tools
+Development platform: Ubuntu 24.04 LTS (kernel newer than v5.7)
 
 Install a compatible version of the following tools:
 
@@ -25,12 +24,22 @@ Install a compatible version of the following tools:
 
 After, install:
 
-- the Cilium eBPF tool with `go get github.com/cilium/ebpf`
 - Linux headers files `sudo apt install linux-headers-generic`, `sudo ln -sf /usr/include/asm-generic/ /usr/include/asm`
 - eBPF headers `sudo apt install libbpf-dev`
 
 ## Test
 
-The directories `monitor ` and `stopper` stores preliminary examples
-that demonstrate how to interact with Simulink-generated models via
-eBPF. For each example follow the instructions.
+The current version uses the `DualACC` model from this
+[repo](https://github.com/dariofad/sim2cpp/tree/64a19af43fbcb30ff8d2738f3f74f72d35ea89f2),
+and relies on the latest version of the Matlab client implemented
+[here](https://github.com/shincyou0916/Falsification-for-MPCACC-model-with-eBPF).
+
+Remember to complete the additional setup as described within the
+directory `simulator `.
+
+### Run
+
+- Disable ASLR with `make aslr_off` before starting the development session
+- Build and run the server with `make`
+
+You can get additional feedback checking the output of the eBPF probes at `/sys/kernel/tracing/trace_pipe`.

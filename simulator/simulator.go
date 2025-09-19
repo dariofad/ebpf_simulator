@@ -115,9 +115,9 @@ func Run(data map[string]interface{}) (*Result, error) {
 	}
 
 	// fix the spec for the the maps
-	dRelMapSpec, ok := spec.Maps["d_rel_map"]
+	dRelMapSpec, ok := spec.Maps["d_rel_noise_map"]
 	if !ok {
-		log.Print("Cannot get the d_rel map spec")
+		log.Print("Cannot get the d_rel_noise map spec")
 		return nil, errors.New("Simulation failed: cannot find map in spec")
 	}
 	dRelMapSpec.MaxEntries = MAX_CYCLES
@@ -129,7 +129,7 @@ func Run(data map[string]interface{}) (*Result, error) {
 	aEgoMapSpec.MaxEntries = MAX_CYCLES
 	vEgoMapSpec, ok := spec.Maps["v_ego_map"]
 	if !ok {
-		log.Print("Cannot get the d_rel map spec")
+		log.Print("Cannot get the v_ego map spec")
 		return nil, errors.New("Simulation failed: cannot find map in spec")
 	}
 	vEgoMapSpec.MaxEntries = MAX_CYCLES
@@ -151,17 +151,17 @@ func Run(data map[string]interface{}) (*Result, error) {
 	}
 	values, err := getDRel(data, MAX_CYCLES)
 	if err != nil {
-		return nil, errors.New("Simulation failed: cannot convert d_rel data points")
+		return nil, errors.New("Simulation failed: cannot convert d_rel_noise data points")
 	}
 	if VERBOSE {
-		log.Println("d_rel values:", values)
+		log.Println("d_rel_noise values:", values)
 	}
 	// Perform batch update
-	_, err = probeObjs.D_relMap.BatchUpdate(keys, values, &ebpf.BatchOptions{
+	_, err = probeObjs.D_relNoiseMap.BatchUpdate(keys, values, &ebpf.BatchOptions{
 		Flags: uint64(ebpf.UpdateAny),
 	})
 	if err != nil {
-		return nil, errors.New("Simulation failed: cannot perform batch update for d_rel")
+		return nil, errors.New("Simulation failed: cannot perform batch update for d_rel_noise")
 	}
 
 	// Open executable and link the uproble
@@ -222,11 +222,11 @@ func Run(data map[string]interface{}) (*Result, error) {
 	return &result, nil
 }
 
-// Extract d_rel values from the simulation raw data
+// Extract d_rel_noise values from the simulation raw data
 func getDRel(data map[string]interface{}, dataPoints uint32) ([]float64, error) {
 
 	values := make([]float64, dataPoints)
-	rawVect, ok := data["d_rel"].([]interface{})
+	rawVect, ok := data["d_rel_noise"].([]interface{})
 	if ok {
 		log.Printf("Found %T datapoints", rawVect)
 		for pos, rawVal := range rawVect {
@@ -237,8 +237,8 @@ func getDRel(data map[string]interface{}, dataPoints uint32) ([]float64, error) 
 			values[pos] = floatVal
 		}
 	} else {
-		log.Print("Cannot extract the d_rel values")
-		return nil, errors.New("Cannot find d_rel in map")
+		log.Print("Cannot extract the d_rel_noise values")
+		return nil, errors.New("Cannot find d_rel_noise in map")
 	}
 	return values, nil
 }

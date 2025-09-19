@@ -30,8 +30,8 @@ After, install:
 ## Test
 
 The current version uses the `DualACC` model from this
-[repo](https://github.com/dariofad/sim2cpp/tree/64a19af43fbcb30ff8d2738f3f74f72d35ea89f2),
-and relies on the latest version of the Matlab client implemented
+[repo](https://github.com/dariofad/sim2cpp) (commit: 058d589), and
+relies on the Matlab client implemented
 [here](https://github.com/shincyou0916/Falsification-for-MPCACC-model-with-eBPF).
 
 Remember to complete the additional setup as described within the

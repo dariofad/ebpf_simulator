@@ -90,6 +90,25 @@ func Run(data map[string]interface{}) (*Result, error) {
 		return nil, errors.New("Simulation failed: error setting value in spec")
 	}
 
+	// Set the simulation mode
+	var MODE uint16 = 0
+	rawMode, ok := data["mode"].(interface{})
+	if ok {
+		tmp_v, ok := rawMode.(float64)
+		MODE = uint16(tmp_v)
+		if !ok || (MODE != 0 && MODE != 1) {
+			log.Print("Unrecognized mode")
+			return nil, errors.New("Simulation failed: unrecognized mode")
+		}
+	} else {
+		log.Print("Cannot detect the mode")
+		return nil, errors.New("Simulation failed: unrecognized input")
+	}
+	if err = spec.Variables["MODE"].Set(MODE); err != nil {
+		log.Printf("setting variable: %s", err)
+		return nil, errors.New("Simulation failed: error setting value in spec")
+	}
+
 	// Set the simulation number of cycles
 	var MAX_CYCLES uint32
 	dataPoints, ok := data["datapoints"].([]interface{})
@@ -114,25 +133,30 @@ func Run(data map[string]interface{}) (*Result, error) {
 		return nil, errors.New("Simulation failed: error setting value in spec")
 	}
 
-	// fix the spec for the the maps
+	// Fix the spec for the maps based on the data
+	// Relative distance (noise)
 	dRelMapSpec, ok := spec.Maps["d_rel_noise_map"]
 	if !ok {
 		log.Print("Cannot get the d_rel_noise map spec")
 		return nil, errors.New("Simulation failed: cannot find map in spec")
 	}
 	dRelMapSpec.MaxEntries = MAX_CYCLES
-	aEgoMapSpec, ok := spec.Maps["a_ego_map"]
-	if !ok {
-		log.Print("Cannot get the a_ego map spec")
-		return nil, errors.New("Simulation failed: cannot find map in spec")
+	if MODE == 0 {
+		// Acceleration Ego
+		aEgoMapSpec, ok := spec.Maps["a_ego_map"]
+		if !ok {
+			log.Print("Cannot get the a_ego map spec")
+			return nil, errors.New("Simulation failed: cannot find map in spec")
+		}
+		// Speed Ego
+		aEgoMapSpec.MaxEntries = MAX_CYCLES
+		vEgoMapSpec, ok := spec.Maps["v_ego_map"]
+		if !ok {
+			log.Print("Cannot get the v_ego map spec")
+			return nil, errors.New("Simulation failed: cannot find map in spec")
+		}
+		vEgoMapSpec.MaxEntries = MAX_CYCLES
 	}
-	aEgoMapSpec.MaxEntries = MAX_CYCLES
-	vEgoMapSpec, ok := spec.Maps["v_ego_map"]
-	if !ok {
-		log.Print("Cannot get the v_ego map spec")
-		return nil, errors.New("Simulation failed: cannot find map in spec")
-	}
-	vEgoMapSpec.MaxEntries = MAX_CYCLES
 
 	// load eBPF objects (maps + programs) into the kernel
 	probeObjs := probeObjects{}
@@ -142,7 +166,7 @@ func Run(data map[string]interface{}) (*Result, error) {
 	}
 	defer probeObjs.Close()
 
-	// Inject datapoints (with batch update)
+	// Prepare noise for injection datapoints (with batch update)
 	keys := make([]uint32, MAX_CYCLES)
 	var tmpKey uint32 = 0
 	for tmpKey < MAX_CYCLES {
@@ -164,7 +188,7 @@ func Run(data map[string]interface{}) (*Result, error) {
 		return nil, errors.New("Simulation failed: cannot perform batch update for d_rel_noise")
 	}
 
-	// Open executable and link the uproble
+	// Open executable and link the uprobe
 	ex, err := link.OpenExecutable(binPath)
 	if err != nil {
 		log.Fatalf("opening executable: %s", err)
@@ -196,22 +220,25 @@ func Run(data map[string]interface{}) (*Result, error) {
 	}
 
 	// Read the simulation output trace
-	// todo
 	a_ego := make([]float64, MAX_CYCLES)
-	for pos := uint32(0); pos < MAX_CYCLES; pos++ {
-		err := probeObjs.A_egoMap.Lookup(&pos, &a_ego[pos])
-		if err != nil {
-			log.Printf("a_ego: lookup failed: %v\n", err)
-			return nil, errors.New("Error reading simulation results: cannot complete reads")
-		}
-	}
 	v_ego := make([]float64, MAX_CYCLES)
-	for pos := uint32(0); pos < MAX_CYCLES; pos++ {
-		err := probeObjs.V_egoMap.Lookup(&pos, &v_ego[pos])
-		if err != nil {
-			log.Printf("v_ego: lookup failed: %v\n", err)
-			return nil, errors.New("Error reading simulation results: cannot complete reads")
+	if MODE == 0 {
+		for pos := uint32(0); pos < MAX_CYCLES; pos++ {
+			err := probeObjs.A_egoMap.Lookup(&pos, &a_ego[pos])
+			if err != nil {
+				log.Printf("a_ego: lookup failed: %v\n", err)
+				return nil, errors.New("Error reading simulation results: cannot complete reads")
+			}
 		}
+		for pos := uint32(0); pos < MAX_CYCLES; pos++ {
+			err := probeObjs.V_egoMap.Lookup(&pos, &v_ego[pos])
+			if err != nil {
+				log.Printf("v_ego: lookup failed: %v\n", err)
+				return nil, errors.New("Error reading simulation results: cannot complete reads")
+			}
+		}
+	} else {
+		// todo implement
 	}
 
 	// Return the output trace back to the server

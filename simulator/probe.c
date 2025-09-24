@@ -6,6 +6,8 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
+volatile const __u16 MODE; // 0: OFFLINE, 1: ONLINE
+
 // spec values
 volatile const __u64 ADDR_DREL;
 volatile const __u64 ADDR_AEGO;
@@ -25,6 +27,7 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, __u32);
 	__type(value, __u64); // use __u64 to store an ieee754 value
+	__uint(max_entries, 1);		
 } d_rel_noise_map SEC(".maps");
 
 // a_ego map
@@ -32,6 +35,7 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, __u32);
 	__type(value, __u64); // use __u64 to store an ieee754 value
+	__uint(max_entries, 1);		
 } a_ego_map SEC(".maps");
 
 // v_ego map
@@ -39,7 +43,19 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, __u32);
 	__type(value, __u64); // use __u64 to store an ieee754 value
+	__uint(max_entries, 1);	
 } v_ego_map SEC(".maps");
+
+// structs and ringbuffers for online monitoring
+struct record {
+	__u32 time;
+	__u64 a_ego;
+	__u64 v_ego;
+};
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 32 * 4096); // must be a power of 2 and a multiple of 4096 (memory page size)
+} record_rb SEC(".maps");
 
 static __always_inline int count_leading_left_zeroes(__u64 n) {
 
@@ -221,45 +237,80 @@ int uprobe_drel_probe() {
 	return 0;
 }
 
-SEC("uretprobe/output_probe")
-int uprobe_output_probe() {
+static int write_to_array(__u32 time, __u64 a_ego, __u64 v_ego) {
 
-	__u32 write_map_key = cycle - 1;	
-
-	__u64 buf = 0;
-	// read a_ego
-	if (bpf_probe_read_user(&buf, sizeof(buf), (void *)(ADDR_AEGO)) == 0) {
-		bpf_printk("a_ego: %llu", buf);
-	} else {
-		bpf_printk("Failed to read a_ego");
-		return -1;
-	}
 	// write it to the map
-	int err = bpf_map_update_elem(&a_ego_map, &write_map_key, &buf, BPF_ANY);
+	int err = bpf_map_update_elem(&a_ego_map, &time, &a_ego, BPF_ANY);
 	if (err != 0) {
 		bpf_printk("Cannot write a_ego to its map");
 		return -1;
 	} else {
-		bpf_printk("Written a_ego: %llu", buf);
+		bpf_printk("Written a_ego: %llu", a_ego);
 	}
 	
-	// read v_ego
-	if (bpf_probe_read_user(&buf, sizeof(buf), (void *)(ADDR_VEGO)) == 0) {
-		bpf_printk("v_ego: %llu", buf);
-	} else {
-		bpf_printk("Failed to read v_ego");
-		return -1;
-	}
 	// write it to the map
-	err = bpf_map_update_elem(&v_ego_map, &write_map_key, &buf, BPF_ANY);
+	err = bpf_map_update_elem(&v_ego_map, &time, &v_ego, BPF_ANY);
 	if (err != 0) {
 		bpf_printk("Cannot write v_ego to its map");
 		return -1;
 	} else {
-		bpf_printk("Written v_ego: %llu\n", buf);
+		bpf_printk("Written v_ego: %llu\n", v_ego);
 	}
 
 	return 0;
+}
+
+static int write_to_rb(__u32 time, __u64 a_ego, __u64 v_ego) {
+
+	// reserve memory in the ring buffer
+	struct record *data = bpf_ringbuf_reserve(&record_rb, sizeof(struct record), 0);
+	if (data == NULL) {
+		bpf_printk("Failed to reserve rb memory");
+		return -1;
+	}
+
+	// init data record
+	data->time = time;
+	data->a_ego = a_ego;
+	data->v_ego = v_ego;	
+
+	// commit to the rb
+	bpf_ringbuf_submit(data, BPF_RB_NO_WAKEUP);
+    return 0;
+}
+
+// todo test
+SEC("uretprobe/output_probe")
+int uprobe_output_probe() {
+
+        __u32 time = cycle - 1;			
+	__u64 a_ego = 0;
+	// read a_ego
+	if (bpf_probe_read_user(&a_ego, sizeof(a_ego), (void *)(ADDR_AEGO)) == 0) {
+		bpf_printk("a_ego: %llu", a_ego);
+	} else {
+		bpf_printk("Failed to read a_ego");
+		return -1;
+	}
+
+	__u64 v_ego = 0;
+	// read v_ego
+	if (bpf_probe_read_user(&v_ego, sizeof(v_ego), (void *)(ADDR_VEGO)) == 0) {
+		bpf_printk("v_ego: %llu", v_ego);
+	} else {
+		bpf_printk("Failed to read v_ego");
+		return -1;
+	}
+
+	// write to the proper map based on the mode
+	if (MODE == 0){
+		// OFFLINE
+		return write_to_array(time, a_ego, v_ego);
+	} else {
+		// ONLINE
+		return write_to_rb(time, a_ego, v_ego);
+		
+	}
 }
 
 

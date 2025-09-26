@@ -1,15 +1,22 @@
 package simulator
 
 import (
+	"bytes"
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
 )
 
@@ -209,19 +216,38 @@ func Run(data map[string]interface{}) (*Result, error) {
 	}
 	defer uprobe_main.Close()
 
-	// Run the simulation and wait until it terminates
-	binCmd := exec.Command(binPath)
+	// Run the simulation
+	ctx, cancelSimulation := context.WithCancel(context.Background())
+	defer cancelSimulation()
+	binCmd := exec.CommandContext(ctx, binPath)
 	binCmd.Stdout = os.Stdout
 	binCmd.Stderr = os.Stderr
-	log.Println("Starting simulation")
-	err = binCmd.Run()
-	if err != nil {
-		log.Printf("Simulation ended (%s)", err)
+	// Start the command
+	log.Print("Starting simulation")
+	if err := binCmd.Start(); err != nil {
+		log.Printf("Failed to start simulation command: %v", err)
+		return nil, errors.New("Simulation start command failed")
 	}
-
-	// Read the simulation output trace
+	// Prepare the arrays for the result and start
 	a_ego := make([]float64, MAX_CYCLES)
 	v_ego := make([]float64, MAX_CYCLES)
+	if MODE == 0 {
+		// wait until simulation terminates
+		if err := binCmd.Wait(); err != nil {
+			if err != nil && !cmdWasSigkilled(err) {
+				log.Printf("Simulation finished with error: %v", err)
+				return nil, errors.New("Simulation failed with error")
+			}
+		} else {
+			fmt.Println("Simulation completed successfully")
+		}
+	} else {
+		// don't wait until it terminates
+		log.Printf("Simulation running")
+	}
+
+	var records []ModelRecord
+	// Read the simulation output trace
 	if MODE == 0 {
 		for pos := uint32(0); pos < MAX_CYCLES; pos++ {
 			err := probeObjs.A_egoMap.Lookup(&pos, &a_ego[pos])
@@ -238,7 +264,36 @@ func Run(data map[string]interface{}) (*Result, error) {
 			}
 		}
 	} else {
-		// todo implement
+		// Create a ring buffer reader
+		rbReader, err := ringbuf.NewReader(probeObjs.RecordRb)
+		if err != nil {
+			log.Printf("Failed to create ring buffer reader: %v", err)
+			return nil, errors.New("Error creating the ring buffer reader")
+		}
+		defer rbReader.Close()
+		// Read events from the ring buffer
+		for {
+			rbReader.SetDeadline(time.Now().Add(250 * time.Millisecond))
+			record, err := rbReader.Read()
+			if err != nil {
+				// check if simulation is still runnning
+				if !(binCmd.ProcessState == nil || !binCmd.ProcessState.Exited()) {
+					break
+				}
+			}
+			// Parse the event
+			var mrec ModelRecord
+			err = binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &mrec)
+			if err != nil {
+				log.Printf("Stop reading records: %v", err)
+				break
+			}
+			log.Printf("mrec %v", mrec)
+			records = append(records, mrec)
+		}
+
+		//log.Printf("records %v", records)
+
 	}
 
 	// Return the output trace back to the server
@@ -255,7 +310,6 @@ func getDRel(data map[string]interface{}, dataPoints uint32) ([]float64, error) 
 	values := make([]float64, dataPoints)
 	rawVect, ok := data["d_rel_noise"].([]interface{})
 	if ok {
-		log.Printf("Found %T datapoints", rawVect)
 		for pos, rawVal := range rawVect {
 			floatVal, ok := rawVal.(float64)
 			if !ok {
@@ -268,4 +322,20 @@ func getDRel(data map[string]interface{}, dataPoints uint32) ([]float64, error) 
 		return nil, errors.New("Cannot find d_rel_noise in map")
 	}
 	return values, nil
+}
+
+func cmdWasSigkilled(err error) bool {
+
+	if err == nil {
+		return false
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		return false
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok {
+		return false
+	}
+	return status.Signaled() && status.Signal() == syscall.SIGKILL
 }

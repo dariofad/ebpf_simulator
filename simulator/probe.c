@@ -17,7 +17,7 @@ volatile const __u64 ADDR_VEGO;
 volatile const __u32 MINOR_TO_MAJOR_RATIO;
 __u32 minor_step = 0;
 __u32 IS_MAJOR = 0;
-__u32 cycle = 0;
+__u32 time = 0;
 __u32 log_counter = 0;
 volatile const __u32 MAX_CYCLES;
 
@@ -197,19 +197,19 @@ int uprobe_drel_probe() {
 	// determine if the call is part of a major cycle
 	if (minor_step % MINOR_TO_MAJOR_RATIO == 0){
 		IS_MAJOR = 1;
-		cycle++;		
+		time++;		
 	} else {
 		IS_MAJOR = 0;
 	}
 	minor_step++;	
-	if (cycle > MAX_CYCLES) {
-		bpf_printk("Logged %d records", log_counter);
+	if (time > MAX_CYCLES) {
+		bpf_printk("Logged %d records", log_counter-1);
 		bpf_printk("SIGKILL sent to process");
 		bpf_send_signal(SIGKILL);
 		return 0;
 	}
         if (IS_MAJOR) {
-		__u32 d_rel_key = cycle - 1;
+		__u32 d_rel_key = time - 1;
 		// 1. read d_rel from input trace
 		__u64 *d_rel_noise = bpf_map_lookup_elem(&d_rel_noise_map, &d_rel_key);
 		if (!d_rel_noise){
@@ -292,7 +292,7 @@ int uprobe_output_probe() {
 
 	if (!IS_MAJOR)
 		return 0;
-        __u32 time = cycle - 1;			
+        __u32 actual_time =  time- 1;			
 	__u64 a_ego = 0;
 	// read a_ego
 	if (bpf_probe_read_user(&a_ego, sizeof(a_ego), (void *)(ADDR_AEGO)) == 0) {
@@ -315,10 +315,10 @@ int uprobe_output_probe() {
 	// write to the proper map based on the mode
 	if (MODE == 0){
 		// OFFLINE
-		return write_to_array(time, a_ego, v_ego);
+		return write_to_array(actual_time, a_ego, v_ego);
 	} else {
 		// ONLINE
-		return write_to_rb(time, a_ego, v_ego);
+		return write_to_rb(actual_time, a_ego, v_ego);
 		
 	}
 }

@@ -16,12 +16,13 @@ Install a compatible version of the following tools:
 - `GNU  objdumb` 2.42
 - `GNU  readelf` 2.42
 - `GNU Make` 4.3
-- `bpftool` v7.4.0 (with `libbpf` v1.4)
+- `bpftool` 7.4.0 (with `libbpf` 1.4)
 - `g++` 13.3.3
 - `go` 1.24.3
 - `llvm-strip` 18.1.3
 - `llvm` 18.1.3
-- clang
+- `clang` 18.1.3
+- `docker ` 28.4.0
 
 After, install:
 
@@ -41,6 +42,7 @@ directory `simulator `.
 ### Run
 
 - Disable ASLR with `make aslr_off` before starting the development session
+- Create the redis container with `make redis`
 - Build and run the server with `make`
 
 You can get additional feedback checking the output of the eBPF probes at `/sys/kernel/tracing/trace_pipe`.

@@ -1,5 +1,7 @@
 package simulator
 
+import "strconv"
+
 // mock result struct
 type Result struct {
 	AEgo []float64 `msgpack:"a_ego"`
@@ -11,4 +13,8 @@ type ModelRecord struct {
 	Filler uint32
 	AEgo   float64
 	VEgo   float64
+}
+
+func ModelRecordToCSVString(record ModelRecord) string {
+	return strconv.FormatFloat(record.AEgo, 'f', 5, 64) + "," + strconv.FormatFloat(record.VEgo, 'f', 5, 64)
 }

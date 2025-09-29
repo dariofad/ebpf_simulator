@@ -18,6 +18,7 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/redis/go-redis/v9"
 )
 
 var VERBOSE bool
@@ -264,6 +265,17 @@ func Run(data map[string]interface{}) (*Result, error) {
 			}
 		}
 	} else {
+		// Create the Redis client
+		redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+		// Get the simulation id
+		simulationId := strconv.Itoa(0) // todo fix
+		// Get the background context
+		bg_ctx := context.Background()
+		// Add a new redis set fot the current run
+		if err := redisClient.SAdd(bg_ctx, "simulation", simulationId).Err(); err != nil {
+			log.Print("Failed to add simulation set to Redis:", err)
+			return nil, errors.New("Error adding new simulation set to Redis")
+		}
 		// Create a ring buffer reader
 		rbReader, err := ringbuf.NewReader(probeObjs.RecordRb)
 		if err != nil {
@@ -288,12 +300,15 @@ func Run(data map[string]interface{}) (*Result, error) {
 				log.Printf("Stop reading records: %v", err)
 				break
 			}
-			log.Printf("mrec %v", mrec)
 			records = append(records, mrec)
 		}
-
-		//log.Printf("records %v", records)
-
+		// Write records to Redis
+		simulationKey := "simulation:" + simulationId
+		if err = writeToRedis(bg_ctx, redisClient, simulationKey, records); err != nil {
+			return nil, errors.New("Error writing records to Redis")
+		}
+		// Empty local record slice
+		records = []ModelRecord{}
 	}
 
 	// Return the output trace back to the server
@@ -302,6 +317,25 @@ func Run(data map[string]interface{}) (*Result, error) {
 		VEgo: v_ego,
 	}
 	return &result, nil
+}
+
+// Write a slice of records to Redis
+func writeToRedis(ctx context.Context, redisClient *redis.Client, simulationKey string, records []ModelRecord) error {
+
+	// convert records to string representation and add them to a Redis sorted set
+	var z []redis.Z
+	for _, rec := range records {
+		z = append(z, redis.Z{Score: float64(rec.Time), Member: ModelRecordToCSVString(rec)})
+	}
+	// push records to Redis
+	if n, err := redisClient.ZAdd(ctx, simulationKey, z...).Result(); err != nil {
+		log.Printf("Failed to write batch for simulation: %v", err)
+		return err
+	} else {
+		log.Print("Uploaded to Redis %d records:", n)
+	}
+
+	return nil
 }
 
 // Extract d_rel_noise values from the simulation raw data

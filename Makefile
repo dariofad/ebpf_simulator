@@ -3,6 +3,7 @@
 EBPF_PROBE = probe
 GO_MODULE = ebpf_simulator
 SIMULATOR_PATH := simulator
+REDIS_PORT := 6379
 
 all: run
 
@@ -15,9 +16,17 @@ generate: vmlinux
 
 build: generate
 # with CGO_ENABLED=0 the build doesn't depend on libc
-	@CGO_ENABLED=0 GO_ARCH=amd64 go build 
+	@CGO_ENABLED=0 GO_ARCH=amd64 go build
 
-run: build
+redis:
+	docker create --name redis -p $(REDIS_PORT):$(REDIS_PORT) redis:latest
+
+start_redis:
+	docker start redis
+
+run: build start_redis
+	@echo "Starting Redis container..."
+	sleep 3
 	@sudo ./$(GO_MODULE)
 
 clean:

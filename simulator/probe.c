@@ -18,6 +18,7 @@ volatile const __u32 MINOR_TO_MAJOR_RATIO;
 __u32 minor_step = 0;
 __u32 IS_MAJOR = 0;
 __u32 cycle = 0;
+__u32 log_counter = 0;
 volatile const __u32 MAX_CYCLES;
 
 // signals
@@ -202,6 +203,7 @@ int uprobe_drel_probe() {
 	}
 	minor_step++;	
 	if (cycle > MAX_CYCLES) {
+		bpf_printk("Logged %d records", log_counter);
 		bpf_printk("SIGKILL sent to process");
 		bpf_send_signal(SIGKILL);
 		return 0;
@@ -280,8 +282,8 @@ static int write_to_rb(__u32 time, __u64 a_ego, __u64 v_ego) {
 
 	// commit to the rb
 	bpf_ringbuf_submit(data, BPF_RB_NO_WAKEUP);
-	//bpf_printk("Record committed to the ring buffer");	
-    return 0;
+	//bpf_printk("Record committed to the ring buffer");
+	return 0;
 }
 
 // todo test
@@ -309,6 +311,7 @@ int uprobe_output_probe() {
 		return -1;
 	}
 
+	log_counter += 1;
 	// write to the proper map based on the mode
 	if (MODE == 0){
 		// OFFLINE

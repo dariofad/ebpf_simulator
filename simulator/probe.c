@@ -231,7 +231,7 @@ int uprobe_timer() {
 	return 0;
 }
 
-static inline int read_signals(__u32 nof_signals, __u32 key_offset) {
+static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUTPUT) {
 
 	if (nof_signals > MAX_NOF_SIGNALS){
 		bpf_printk("Too many signals to read");
@@ -240,7 +240,7 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset) {
 
 	// determine the correct simulation time
        __u32 actual_time = time - 1;
-       bpf_printk("Actual time %d:", actual_time);
+       bpf_printk("Actual time: %d", actual_time);
        __u64 values[16];
 
        for (__u32 k = 0; k < nof_signals; k++){
@@ -279,7 +279,7 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset) {
 
        __u16 INTERACTIVE = get_interactive();
        struct out_record *r;
-       if (INTERACTIVE == 1){
+       if (INTERACTIVE == 1 && IS_OUTPUT == 1){
 	       // reserve memory in the ring buffer
 	       r = bpf_ringbuf_reserve(&out_rb, sizeof(struct out_record) + nof_signals * sizeof(__u64), 0);
 	       if (r == NULL) {
@@ -308,7 +308,7 @@ int uprobe_read_i() {
         if (!IS_MAJOR){ // skip the rest of the program if not major step
 		return 0;
 	} else {
-		return read_signals(NOF_RISIGNALS, NOF_WISIGNALS);
+		return read_signals(NOF_RISIGNALS, NOF_WISIGNALS, 0);
 	}
 }
 
@@ -319,7 +319,7 @@ int uprobe_read_o() {
 		return 0;
 	} else {
 		log_counter += 1;
-		return read_signals(NOF_ROSIGNALS, NOF_WISIGNALS + NOF_RISIGNALS);
+		return read_signals(NOF_ROSIGNALS, NOF_WISIGNALS + NOF_RISIGNALS, 1);
 	}
 }
 

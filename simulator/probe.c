@@ -240,7 +240,9 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
 
 	// determine the correct simulation time
        __u32 actual_time = time - 1;
-       bpf_printk("Actual time: %d", actual_time);
+       bpf_printk("READ, actual time: %d", actual_time);
+
+       __u16 INTERACTIVE = get_interactive();
        __u64 values[16];
 
        for (__u32 k = 0; k < nof_signals; k++){
@@ -259,25 +261,27 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
 		       bpf_printk("Failed to read signal");
 		       return -1;
 	       }
-	       // get the signal trace
-	       bpf_printk("Retrieving trace for signal %d", key);
-	       struct m_signal *sign_trace = (struct m_signal *)bpf_map_lookup_elem(&tracee_map, &key);
-	       if (sign_trace == NULL){
-		       bpf_printk("ERR retrieving sign_trace map");			
-		       return -1;
-	       }
-	       // update the signal trace
-	       int err = bpf_map_update_elem(sign_trace, &actual_time, &signal, BPF_ANY);
-	       if (err != 0) {
-		       bpf_printk("Cannot write signal %d to trace", key);
-		       return -1;
-	       } else {
-		       bpf_printk("Signal %d written to trace, value: %llu", key, signal);
+	       if (INTERACTIVE == 0){
+		       // get the signal trace
+		       bpf_printk("Retrieving trace for signal %d", key);
+		       struct m_signal *sign_trace = (struct m_signal *)bpf_map_lookup_elem(&tracee_map, &key);
+		       if (sign_trace == NULL){
+			       bpf_printk("ERR retrieving sign_trace map");			
+			       return -1;
+		       }
+		       // update the signal trace
+		       int err = bpf_map_update_elem(sign_trace, &actual_time, &signal, BPF_ANY);
+		       if (err != 0) {
+			       bpf_printk("Cannot write signal %d to trace", key);
+			       return -1;
+		       } else {
+			       bpf_printk("Signal %d written to trace, value: %llu", key, signal);
+		       }
+		       return 0;
 	       }
 	       values[k] = signal;
        }
 
-       __u16 INTERACTIVE = get_interactive();
        struct out_record *r;
        if (INTERACTIVE == 1 && IS_OUTPUT == 1){
 	       // reserve memory in the ring buffer
@@ -323,63 +327,87 @@ int uprobe_read_o() {
 	}
 }
 
+struct w_loop_ctx {
+	__u32 actual_time;
+};
+
+static long write_signals(u64 index, void *_ctx) {
+	
+	struct w_loop_ctx *ctx = _ctx;
+	__u32 skey = (__u32)index;
+
+	// get the signal trace
+	bpf_printk("Retrieving perturbation trace for signal %d", skey);
+	void *sign_trace = bpf_map_lookup_elem(&tracee_map, &skey);
+	if (!sign_trace){
+		bpf_printk("ERR retrieving sign_trace map");
+		return 1;
+	}
+	// get the perturbation value
+	__u64 *pert = bpf_map_lookup_elem(sign_trace, &(ctx->actual_time));
+	if (!pert){
+		bpf_printk("Error reading signal %d pert", skey);
+		return 1;
+	} else {
+		bpf_printk("Signal %d perturbation: %llu", skey, *pert);
+	}
+
+	// get the signal address
+	__u64 *address = bpf_map_lookup_elem(&address_map, &skey);
+	if (!address){
+		bpf_printk("ERR retrieving address from address_map");
+		return 1;
+	}
+		
+	// read the signal from user space
+	__u64 sign = 0;
+	if (bpf_probe_read_user(&sign, sizeof(sign), (void *)(*address)) == 0) {
+		bpf_printk("Signal %d from user space: %llu", skey, sign);
+	} else {
+		bpf_printk("Failed to read signal %d from user space", skey);
+		return 1;
+	}
+
+	// add perturbation to signal
+	sign = ieee754_add(sign, *pert);
+	bpf_printk("New value after perturbation: %llu", sign);
+	
+	// overwrite signal in user space
+	long err = bpf_probe_write_user((void *)(address), &sign, 8);
+
+	if (err != 0) {
+		bpf_printk("Failed to overwrite signal %k, err: %ld", skey, err);
+		return 1;
+	}
+
+	return 0;
+}
+
 SEC("uretprobe/write_i")
 int uprobe_write_i() {
 
-        if (!IS_MAJOR) // skip the rest of the program if not major step
+        if (!IS_MAJOR){ // skip the rest of the program if not major step
 		return 0;
-
-	if (NOF_WISIGNALS > MAX_NOF_SIGNALS){
-		bpf_printk("Too many signals to write");
-		return -1;
-	}
-
-	for (__u32 s = 0; s < NOF_WISIGNALS; s++){
-		// get the signal trace
-		__u32 key = s;
-		bpf_printk("Retrieving perturbation trace for signal %d", key);
-		void *sign_trace = bpf_map_lookup_elem(&tracee_map, &key);
-		if (!sign_trace){
-			bpf_printk("ERR retrieving sign_trace map");
+	} else {
+		if (NOF_WISIGNALS > MAX_NOF_SIGNALS){
+			bpf_printk("Too many signals to write");
 			return -1;
 		}
-		
-		// read the perturbation from the input trace
+
 		__u32 actual_time = time - 1;
-		__u64 *pert = bpf_map_lookup_elem(sign_trace, &actual_time);
-		if (!pert){
-			bpf_printk("Error reading signal %d pert", key);
-			return -1;
-		} else {
-			bpf_printk("Signal %d perturbation: %llu", key, *pert);
-		}
+		bpf_printk("WRITE, actual time %d", actual_time);
+		bpf_printk("signals to write: %d", NOF_WISIGNALS);
 
-		// get the signal address
-		__u64 *address = bpf_map_lookup_elem(&address_map, &key);
-		if (!address){
-			bpf_printk("ERR retrieving address from address_map");
-			return -1;
-		}
-		
-		// read the signal from the user space
-		__u64 sign = 0;
-		if (bpf_probe_read_user(&sign, sizeof(sign), (void *)(*address)) == 0) {
-			bpf_printk("Signal %d from user space: %llu", key, sign);
-		} else {
-			bpf_printk("Failed to read signal %d from user space", key);
-			return -1;
-		}
+		struct w_loop_ctx ctx = {
+			.actual_time = actual_time,
+		};
 
-		// add perturbation to signal
-		sign = ieee754_add(sign, *pert);
-		bpf_printk("New value after perturbation: %llu", sign);
-
-		// overwrite signal in user space
-		long err = bpf_probe_write_user((void *)(address), &sign, 8);
-		if (err != 0) {
-			bpf_printk("Failed to overwrite signal %k, err: %ld", key, err);
-			return -1;
-		}
+		#pragma unroll
+		for (int i = 0; i < MAX_NOF_SIGNALS; ++i) {
+			if (i >= NOF_WISIGNALS)
+				break;
+			write_signals(i, &ctx);			
+		}		
 	}
 	return 0;
 }

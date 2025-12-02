@@ -231,6 +231,25 @@ int uprobe_timer() {
 	return 0;
 }
 
+static inline int copy_to_pinned_map(__u32 actual_time, __u32 key, __u64 signal) {
+
+	bpf_printk("Retrieving trace for signal %d", key);
+	struct m_signal *sign_trace = (struct m_signal *)bpf_map_lookup_elem(&tracee_map, &key);
+	if (sign_trace == NULL){
+		bpf_printk("ERR retrieving sign_trace map");			
+		return -1;
+	}
+	// update the signal trace
+	int err = bpf_map_update_elem(sign_trace, &actual_time, &signal, BPF_ANY);
+	if (err != 0) {
+		       bpf_printk("Cannot write signal %d to trace", key);
+		       return -1;
+	} else {
+		       bpf_printk("Signal %d written to trace, value: %llu", key, signal);
+	}
+	return 0;
+}
+
 static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUTPUT) {
 
 	if (nof_signals > MAX_NOF_SIGNALS){
@@ -245,8 +264,13 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
        __u16 INTERACTIVE = get_interactive();
        __u64 values[16];
 
-       for (__u32 k = 0; k < nof_signals; k++){
+       bpf_printk("nof_signals: %d", nof_signals);
+
+       for (__u32 k = 0; k < MAX_NOF_SIGNALS; k++){
+	       if (k >= nof_signals)
+		       break;
 	       __u32 key = k + key_offset;
+	       bpf_printk("signal key: %d", key);
 	       // get the signal address
 	       __u64 *address = bpf_map_lookup_elem(&address_map, &key);
 	       if (!address){
@@ -261,23 +285,8 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
 		       bpf_printk("Failed to read signal");
 		       return -1;
 	       }
-	       if (INTERACTIVE == 0){
-		       // get the signal trace
-		       bpf_printk("Retrieving trace for signal %d", key);
-		       struct m_signal *sign_trace = (struct m_signal *)bpf_map_lookup_elem(&tracee_map, &key);
-		       if (sign_trace == NULL){
-			       bpf_printk("ERR retrieving sign_trace map");			
-			       return -1;
-		       }
-		       // update the signal trace
-		       int err = bpf_map_update_elem(sign_trace, &actual_time, &signal, BPF_ANY);
-		       if (err != 0) {
-			       bpf_printk("Cannot write signal %d to trace", key);
-			       return -1;
-		       } else {
-			       bpf_printk("Signal %d written to trace, value: %llu", key, signal);
-		       }
-		       return 0;
+	       if (INTERACTIVE == 0 || IS_OUTPUT == 0){
+		       copy_to_pinned_map(actual_time, key, signal);
 	       }
 	       values[k] = signal;
        }

@@ -3,11 +3,20 @@
 import socket
 import sys
 import argparse
+from typing import Sized
+import numpy as np
+import msgpack
 
 PORT = 8083
 
 def srv_connect(host: str) -> bytearray:
 
+    X = np.array([1+float(i)/100 for i in range(100)], dtype=np.float64)
+    Y = np.array([2 for _ in range(100)], dtype=np.float64)
+    trajectory = dict()
+    trajectory["X"] = X.tolist()
+    trajectory["Y"] = Y.tolist()
+    payload = msgpack.packb(trajectory)    # prepare the trace
     try:
         # Create TCP socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -16,7 +25,12 @@ def srv_connect(host: str) -> bytearray:
         sock.connect((host, PORT))
         print(f"[+] Connected successfully!", file=sys.stderr)
         # todo: implement signal perturbation
-        
+        if isinstance(payload, Sized):
+            sock.sendall(len(payload).to_bytes(4, 'big'))
+            sock.sendall(payload)
+        else:
+            print("Error with payload type")
+            exit(1)
         # wait for end of simulation
         response = sock.recv(4096)
         # Close the socket

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +26,14 @@ var VERBOSE bool
 var RATIO uint32
 var CYCLES uint32
 var INTERACTIVE uint16
+
+type eBPFInjector struct {
+	probeObjs *probeObjects
+}
+
+func (*eBPFInjector) Inject() {
+
+}
 
 // Allow the simulator process to lock memory for eBPF resources
 func RemoveMemlock() {
@@ -95,21 +104,31 @@ func extractTrajectory(rawTrajectory map[string]interface{}, simData my_types.Si
 	return trajectory, nil
 }
 
-// todo: return a handler to the caller to enable enforcement
-func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}) (*my_types.OutputTrace, error) {
+func Start(
+	simulationMode my_types.Service,
+	rawTrajectory map[string]interface{},
+	errCh chan error,
+	resCh chan my_types.OutputTrace,
+	pertCh chan map[string]interface{},
+	wg *sync.WaitGroup,
+) {
 
 	// Load eBPF collection spec
 	spec, err := loadProbe()
 	if err != nil {
 		log.Printf("loading collectionSpec: %s", err)
-		return nil, errors.New("Simulation failed: cannot retrieve collection spec")
+		errCh <- errors.New("Simulation failed: cannot retrieve collection spec")
+		wg.Done()
+		return
 	}
 
 	// Read the simulation data from the configuration file
 	rawSimData, err := os.ReadFile("simulator/config.json")
 	if err != nil {
 		log.Print("Error reading the configuration")
-		return nil, errors.New("Simulation failed: cannot read the configuration file")
+		errCh <- errors.New("Simulation failed: cannot read the configuration file")
+		wg.Done()
+		return
 	}
 	var simData my_types.SimFormat
 	err = json.Unmarshal(rawSimData, &simData)
@@ -117,7 +136,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 	// Set cycles in ebpf
 	err = setCycles(spec, simData)
 	if err != nil {
-		return nil, err
+		errCh <- err
+		wg.Done()
+		return
 	}
 
 	// Fix max entries in eBPF spec, retrieve signals and categories
@@ -136,21 +157,27 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 	log.Printf("nof_wi %d, nof_ri %d, nof_ro %d", _nof_wi, _nof_ri, _nof_ro)
 	if err = spec.Variables["NOF_WISIGNALS"].Set(uint32(len(simData.WTimingI.Signals))); err != nil {
 		log.Printf("Error setting variable setting variable NOF_WISIGNALS: %v", err)
-		return nil, err
+		errCh <- err
+		wg.Done()
+		return
 	}
 	for t := 0; t < len(simData.RTimingI.Signals); t++ {
 		sTypes = append(sTypes, 1)
 	}
 	if err = spec.Variables["NOF_RISIGNALS"].Set(uint32(len(simData.RTimingI.Signals))); err != nil {
 		log.Printf("Error setting variable setting variable NOF_RISIGNALS: %v", err)
-		return nil, err
+		errCh <- err
+		wg.Done()
+		return
 	}
 	for t := 0; t < len(simData.RTimingO.Signals); t++ {
 		sTypes = append(sTypes, 2)
 	}
 	if err = spec.Variables["NOF_ROSIGNALS"].Set(uint32(len(simData.RTimingO.Signals))); err != nil {
 		log.Printf("Error setting variable setting variable NOF_ROSIGNALS: %v", err)
-		return nil, err
+		errCh <- err
+		wg.Done()
+		return
 	}
 
 	// create the probeObjects
@@ -167,14 +194,18 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 		if errors.As(err, &ve) {
 			log.Printf("Verifier error: %+v", ve)
 		}
-		return nil, err
+		errCh <- err
+		wg.Done()
+		return
 	}
 	defer probeObjs.Close()
 
 	// Extract trajectory
 	trajectory, err := extractTrajectory(rawTrajectory, simData)
 	if err != nil {
-		return nil, err
+		errCh <- err
+		wg.Done()
+		return
 	}
 	log.Print("Input trajectory extracted successfully")
 
@@ -185,7 +216,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 	traceeMap := probeObjs.TraceeMap
 	if err != nil {
 		log.Printf("Cannot create mSignals (outer) map: %s", err)
-		return nil, err
+		errCh <- err
+		wg.Done()
+		return
 	}
 	// create signal traces
 	// start preparing a template for the array positions
@@ -200,13 +233,17 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 		inner, err := ebpf.NewMap(innerSpec)
 		if err != nil {
 			log.Printf("Cannot create mSignal (inner) map: %s", err)
-			return nil, err
+			errCh <- err
+			wg.Done()
+			return
 		}
 		// pin the inner map
 		pinPath := "/sys/fs/bpf/inner_values_" + strconv.FormatInt(int64(s), 10)
 		if err := inner.Pin(pinPath); err != nil {
 			log.Printf("Cannot pin inner map at %v", pinPath)
-			return nil, err
+			errCh <- err
+			wg.Done()
+			return
 		}
 		// inject the trajectory
 		if s < int(_nof_wi) { // only for signals to write
@@ -217,7 +254,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 			})
 			if err != nil {
 				log.Printf("Injection of trajectory failed, %v", err)
-				return nil, errors.New("Trajectory injection failure")
+				errCh <- errors.New("Trajectory injection failure")
+				wg.Done()
+				return
 			}
 			log.Printf("Input trajectory %d successfully injected", s)
 		}
@@ -232,7 +271,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 				log.Printf("ERROR: %v", err)
 			}
 			log.Printf("Failed to insert FD for signal %d: %s", s, err)
-			return nil, err
+			errCh <- err
+			wg.Done()
+			return
 		}
 		// defer inner map pinning
 		// Now, unpin the map
@@ -257,12 +298,16 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 			signalAddr, err := strconv.ParseUint(signal.SignAddr, 16, 64)
 			if err != nil {
 				log.Printf("Error converting signal address: %s", err)
-				return nil, err
+				errCh <- err
+				wg.Done()
+				return
 			}
 			err = probeObjs.AddressMap.Update(skey, signalAddr, 0)
 			if err != nil {
 				log.Printf("Cannot perform the update to addressMap: %v", err)
-				return nil, err
+				errCh <- err
+				wg.Done()
+				return
 			}
 			// type
 			err = probeObjs.TypeMap.Update(skey, sTypes[skey], 0)
@@ -276,16 +321,20 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 	} else {
 		INTERACTIVE = 1
 	}
-	if probeObjs.InteractiveMap.Update(uint32(0), uint16(1), 0); err != nil {
+	if probeObjs.InteractiveMap.Update(uint32(0), uint16(INTERACTIVE), 0); err != nil {
 		log.Printf("Error setting interactivity: %s", err)
-		return nil, err
+		errCh <- err
+		wg.Done()
+		return
 	}
 
 	// Open model executable
 	modelExecutable, err := link.OpenExecutable(simData.ModelPath)
 	if err != nil {
 		log.Fatalf("Error opening model executable: %s", err)
-		return nil, err
+		errCh <- err
+		wg.Done()
+		return
 	}
 
 	// Link all uprobes
@@ -295,7 +344,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 		offset, err = strconv.ParseUint(simData.WTimingI.Offset, 10, 64) // base 10
 		if err != nil {
 			log.Printf("Error converting uprobe offset: %s", err)
-			return nil, err
+			errCh <- err
+			wg.Done()
+			return
 		}
 		uprobe_wi, err := modelExecutable.Uprobe(
 			simData.WTimingI.SymbolName,
@@ -304,7 +355,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 		)
 		if err != nil {
 			log.Printf("Error setting the uprobe_wi: %v", err)
-			return nil, err
+			errCh <- err
+			wg.Done()
+			return
 		} else {
 			log.Print("Uprobe_wi linked")
 		}
@@ -315,7 +368,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 		offset, err = strconv.ParseUint(simData.RTimingI.Offset, 10, 64) // base 10
 		if err != nil {
 			log.Printf("Error converting uprobe offset: %s", err)
-			return nil, err
+			errCh <- err
+			wg.Done()
+			return
 		}
 		uprobe_ri, err := modelExecutable.Uprobe(
 			simData.RTimingI.SymbolName,
@@ -324,7 +379,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 		)
 		if err != nil {
 			log.Printf("Error setting the uprobe_ri: %v", err)
-			return nil, err
+			errCh <- err
+			wg.Done()
+			return
 		} else {
 			log.Print("Uprobe_ri linked")
 		}
@@ -335,7 +392,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 		offset, err = strconv.ParseUint(simData.RTimingO.Offset, 10, 64) // base 10
 		if err != nil {
 			log.Printf("Error converting uprobe offset: %s", err)
-			return nil, err
+			errCh <- err
+			wg.Done()
+			return
 		}
 		uprobe_ro, err := modelExecutable.Uprobe(
 			simData.RTimingO.SymbolName,
@@ -344,7 +403,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 		)
 		if err != nil {
 			log.Printf("Error setting the uprobe_ro: %v", err)
-			return nil, err
+			errCh <- err
+			wg.Done()
+			return
 		} else {
 			log.Print("Uprobe_ro linked")
 		}
@@ -366,16 +427,20 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 	log.Print("Starting simulation")
 	if err := binCmd.Start(); err != nil {
 		log.Printf("Failed to start simulation command: %s", err)
-		return nil, err
+		errCh <- err
+		wg.Done()
+		return
 	}
 
 	// wait for non-interactive simulations to terminate
 	if simulationMode == my_types.Falsification {
 		// wait until simulation terminates
 		if err := binCmd.Wait(); err != nil {
-			if err != nil && !cmdWasSigkilled(err) {
+			if !cmdWasSigkilled(err) {
 				log.Printf("Simulation finished with error: %s", err)
-				return nil, err
+				errCh <- err
+				wg.Done()
+				return
 			}
 		} else {
 			log.Print("Simulation completed successfully")
@@ -385,74 +450,15 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 		log.Printf("Simulation is running...")
 	}
 
-	// collect or stream output trace
-	if simulationMode == my_types.Monitoring || simulationMode == my_types.SignalPerturbation {
-		// Create the Redis client
-		redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-		// Get the simulation id
-		simulationId := strconv.Itoa(0) // todo fix
-		// Get the background context
-		bg_ctx := context.Background()
-		// Add a new Redis set fot the current run
-		if err := redisClient.SAdd(bg_ctx, "simulation", simulationId).Err(); err != nil {
-			log.Print("Failed to add simulation set to Redis:", err)
-			return nil, errors.New("Error adding new simulation set to Redis")
+	switch simulationMode {
+	case my_types.Monitoring:
+		ctx := context.Background()
+		if err := monitorSimulation(ctx, probeObjs, _nof_ro); err != nil {
+			errCh <- err
+			wg.Done()
+			return
 		}
-		// Create a ring buffer reader
-		rbReader, err := ringbuf.NewReader(probeObjs.OutRb)
-		if err != nil {
-			log.Printf("Failed to create ring buffer reader: %v", err)
-			return nil, errors.New("Error creating the ring buffer reader")
-		}
-		defer rbReader.Close()
-		// Read events from the ring buffer and write them to Redis
-		var records []my_types.OutRecord
-		var writtenRecords uint32 = 0
-		simulationKey := "simulation:" + simulationId
-		for {
-			rbReader.SetDeadline(time.Now().Add(50 * time.Millisecond))
-			record, err := rbReader.Read()
-			if err == nil {
-
-				// check record validity
-				raw := record.RawSample
-				if len(raw) < int((_nof_ro+1)*8) {
-					log.Printf("Corrupted record: truncated to %d bytes", len(raw))
-				}
-				// convert to a structured record
-				_vals := make([]float64, _nof_ro)
-				for p, _ := range _vals {
-					_tbuf := bytes.NewReader(raw[8+p*8 : 16+p*8])
-					binary.Read(_tbuf, binary.LittleEndian, &_vals[p])
-				}
-				oRec := my_types.OutRecord{
-					Time:   binary.LittleEndian.Uint32(raw),
-					Values: _vals,
-				}
-				records = append(records, oRec)
-			} else if writtenRecords+uint32(len(records)) == CYCLES {
-				// Terminate
-				break
-			}
-			if len(records) >= 50 {
-				if err = writeToRedis(bg_ctx, redisClient, simulationKey, records); err != nil {
-					return nil, errors.New("Error writing records to Redis")
-				}
-				// Empty local record slice
-				writtenRecords += uint32(len(records))
-				records = []my_types.OutRecord{}
-			}
-		}
-		if len(records) != 0 {
-			// Flush last records
-			if err = writeToRedis(bg_ctx, redisClient, simulationKey, records); err != nil {
-				return nil, errors.New("Error writing records to Redis")
-			}
-			// Empty local record slice
-			writtenRecords += uint32(len(records))
-			records = []my_types.OutRecord{}
-		}
-	} else if simulationMode == my_types.Falsification {
+	case my_types.Falsification:
 		var outSignals my_types.OutputTrace
 		for id, signal := range simData.RTimingO.Signals {
 			var signTrace my_types.Trace
@@ -463,7 +469,9 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 			innerTrace, err := ebpf.LoadPinnedMap(pinPath, nil)
 			if err != nil {
 				log.Printf("Cannot recover inner pinned map at %s: %v", pinPath, err)
-				return nil, err
+				errCh <- err
+				wg.Done()
+				return
 			}
 			defer innerTrace.Close()
 			// trace extraction
@@ -472,18 +480,119 @@ func Start(simulationMode my_types.Service, rawTrajectory map[string]interface{}
 				err := innerTrace.Lookup(&pos, &values[pos])
 				if err != nil {
 					log.Printf("Trace lookup failed: %s\n", err)
-					return nil, err
+					errCh <- err
+					wg.Done()
+					return
 				}
 			}
 			signTrace.Values = values
+			//log.Printf("values %v", values)
 			outSignals.Signals = append(outSignals.Signals, signTrace)
-			return &outSignals, nil
 		}
+		//log.Printf("outsignals %v", outSignals)
+		resCh <- outSignals
+	case my_types.StatePerturbation:
+		// todo implement
+	case my_types.SignalPerturbation:
+		// monitor model
+		ctx := context.Background()
+		wgm := &sync.WaitGroup{}
+		wgm.Add(1)
+		errChm := make(chan error, 1)
+		defer close(errChm)
+		go asyncMonitorSimulation(wgm, errChm, ctx, probeObjs, _nof_ro)
+		// perturbate signals (todo implement)
+		// wait for simulation to terminate
+		wgm.Wait()
+		// return the error if occured, otherwise send simulation task terminated
+		select {
+		case err := <-errCh:
+			errCh <- err
+		default:
+			wg.Done()
+		}
+		return
 	}
 
-	// todo: support enforcement
+	// terminate
+	wg.Done()
+	return
+}
 
-	return nil, nil
+func asyncMonitorSimulation(wg *sync.WaitGroup, errCh chan<- error, ctx context.Context, probeObjs probeObjects, _nof_ro uint32) {
+
+	defer wg.Done()
+	err := monitorSimulation(ctx, probeObjs, _nof_ro)
+	errCh <- err
+}
+
+func monitorSimulation(ctx context.Context, probeObjs probeObjects, _nof_ro uint32) error {
+
+	// Create the Redis client
+	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	// Get the simulation id
+	simulationId := strconv.Itoa(0) // todo fix
+	// Add a new Redis set fot the current run
+	if err := redisClient.SAdd(ctx, "simulation", simulationId).Err(); err != nil {
+		log.Print("Failed to add simulation set to Redis:", err)
+		return errors.New("Error adding new simulation set to Redis")
+	}
+	// Create a ring buffer reader
+	rbReader, err := ringbuf.NewReader(probeObjs.OutRb)
+	if err != nil {
+		log.Printf("Failed to create ring buffer reader: %v", err)
+		return errors.New("Error creating the ring buffer reader")
+	}
+	defer rbReader.Close()
+	// Read events from the ring buffer and write them to Redis
+	var records []my_types.OutRecord
+	var writtenRecords uint32 = 0
+	simulationKey := "simulation:" + simulationId
+	for {
+		rbReader.SetDeadline(time.Now().Add(50 * time.Millisecond))
+		record, err := rbReader.Read()
+		if err == nil {
+
+			// check record validity
+			raw := record.RawSample
+			if len(raw) < int((_nof_ro+1)*8) {
+				log.Printf("Corrupted record: truncated to %d bytes", len(raw))
+			}
+			// convert to a structured record
+			_vals := make([]float64, _nof_ro)
+			for p, _ := range _vals {
+				_tbuf := bytes.NewReader(raw[8+p*8 : 16+p*8])
+				binary.Read(_tbuf, binary.LittleEndian, &_vals[p])
+			}
+			oRec := my_types.OutRecord{
+				Time:   binary.LittleEndian.Uint32(raw),
+				Values: _vals,
+			}
+			records = append(records, oRec)
+		} else if writtenRecords+uint32(len(records)) == CYCLES {
+			// Terminate
+			break
+		}
+		if len(records) >= 50 {
+			if err = writeToRedis(ctx, redisClient, simulationKey, records); err != nil {
+				return errors.New("Error writing records to Redis")
+			}
+			// Empty local record slice
+			writtenRecords += uint32(len(records))
+			records = []my_types.OutRecord{}
+		}
+	}
+	if len(records) != 0 {
+		// Flush last records
+		if err = writeToRedis(ctx, redisClient, simulationKey, records); err != nil {
+			return errors.New("Error writing records to Redis")
+		}
+		// Empty local record slice
+		writtenRecords += uint32(len(records))
+		records = []my_types.OutRecord{}
+	}
+
+	return nil
 }
 
 // Writes a slice of records to Redis

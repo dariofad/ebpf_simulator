@@ -182,14 +182,21 @@ func handleMonitoring(conn net.Conn) {
 		return
 	}
 
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	// error channel to get potential error
+	errCh := make(chan error, 1)
+	defer close(errCh)
 	// start non-interactive monitoring
-	_, err = simulator.Start(my_types.Monitoring, rawTrajectory)
-	if err != nil {
+	go simulator.Start(my_types.Monitoring, rawTrajectory, errCh, nil, nil, wg)
+	wg.Wait()
+	select {
+	case err = <-errCh:
 		log.Println("Cannot handle monitoring task:", err)
 		return
-	} else {
-		log.Println("Monitoring started")
-		sendSimulationStartedAck(conn)
+	default:
+		log.Println("Monitoring Monitoring started")
+		sendSimulationEndedAck(conn)
 	}
 }
 
@@ -213,15 +220,26 @@ func handleFalsification(conn net.Conn) {
 	if err != nil {
 		return
 	}
-
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	// error channel to get potential error
+	errCh := make(chan error, 1)
+	defer close(errCh)
+	resCh := make(chan my_types.OutputTrace, 1)
+	defer close(resCh)
 	// start non-interactive falsification
-	outTrace, err := simulator.Start(my_types.Falsification, rawTrajectory)
-	if err != nil {
+	// todo: handle falsification on the server
+	go simulator.Start(my_types.Falsification, rawTrajectory, errCh, resCh, nil, wg)
+	wg.Wait()
+	// check simulation result
+	select {
+	case err = <-errCh:
 		log.Println("Cannot handle falsification task:", err)
 		return
-	} else {
-		log.Println("Falsification started")
-		serializedOutputTrace, err := serialize(*outTrace)
+	default:
+		// no error, send the output trace to the client
+		outTrace := <-resCh
+		serializedOutputTrace, err := serialize(outTrace)
 		if err != nil {
 			log.Printf("Falsification failed: %v", err)
 			return
@@ -251,27 +269,58 @@ func handleSignalPerturbation(conn net.Conn) {
 	lockServer()
 	defer unlockServer()
 
-	// // read raw data
-	// dataLen, rawData, err := getData(conn)
-	// if err != nil {
-	// 	return
-	// }
-	// _ = dataLen
-
-	// // deserialize data
-	// rawTrajectory, err := deserialize(rawData)
-	// if err != nil {
-	// 	return
-	// }
-
-	// start non-interactive monitoring
-	_, err := simulator.Start(my_types.SignalPerturbation, nil)
+	// read the input trace
+	dataLen, rawData, err := getData(conn)
 	if err != nil {
-		log.Println("Cannot handle signal perturbation task:", err)
 		return
-	} else {
-		log.Println("Signal Perturbation mode ended")
-		sendSimulationStartedAck(conn)
+	}
+	_ = dataLen
+
+	// deserialize data
+	rawTrajectory, err := deserialize(rawData)
+	if err != nil {
+		return
+	}
+
+	// create the perturbation communication channel
+	pertCh := make(chan map[string]interface{}, 1024*1024*64) // 32 MB buffer
+	// wg for synchronization
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	// error channel to get potential error
+	errCh := make(chan error, 1)
+	defer close(errCh)
+	resCh := make(chan my_types.OutputTrace, 1)
+	defer close(resCh)
+	// start the simulation (async)
+	go simulator.Start(my_types.SignalPerturbation, rawTrajectory, errCh, resCh, pertCh, wg)
+	// helper to check simulation ended without blocking
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+waitSimulation:
+	for {
+		select {
+		case <-done:
+			log.Printf("Simulation ended, checking result...")
+			break waitSimulation
+		default:
+			log.Print("Keep waiting for the end of the simulation")
+			// listen and inject data
+			time.Sleep(1 * time.Second)
+		}
+	}
+	// check no errors occurred
+	select {
+	case err = <-errCh:
+		log.Println("Error occurred during signal perturbation:", err)
+		return
+	default:
+		// no error
+		log.Println("Simulation finished without errors")
+		return
 	}
 }
 
@@ -299,9 +348,9 @@ func setWriteDeadline(conn net.Conn, seconds uint32) error {
 	return conn.SetWriteDeadline(time.Now().Add(time.Duration(seconds)))
 }
 
-func sendSimulationStartedAck(conn net.Conn) {
+func sendSimulationEndedAck(conn net.Conn) {
 
-	_, err := conn.Write([]byte("Simulation correctly started"))
+	_, err := conn.Write([]byte("Simulation ended"))
 	if err != nil {
 		log.Print("Error writing response", err)
 	}

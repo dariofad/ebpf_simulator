@@ -5,13 +5,13 @@ import (
 	"strconv"
 )
 
-type OutRecord struct {
+type ModelRecord struct {
 	Time   uint32
 	Filler uint32
 	Values []float64
 }
 
-func ModelRecordToCSVString(record OutRecord) string {
+func ModelRecordToCSVString(record ModelRecord) string {
 
 	var tmp bytes.Buffer
 	tmp.WriteString(strconv.Itoa(int(record.Time)))

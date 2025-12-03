@@ -50,7 +50,7 @@ def srv_connect(host: str) -> bytearray:
             perturbation = dict()
             perturbation["X"] = X.tolist()
             perturbation["Y"] = Y.tolist()
-            perturbation["time"] = time_trace
+            perturbation["time"] = np.array(time_trace, dtype=np.uint32).tolist()
             payload = msgpack.packb(perturbation)
             if isinstance(payload, Sized):
                 sock.sendall(len(payload).to_bytes(4, 'big'))

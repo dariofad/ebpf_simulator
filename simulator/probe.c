@@ -70,7 +70,7 @@ struct {
 // signals
 const __u16 SIGKILL = 9;
 
-struct out_record {
+struct model_record {
 	__u32 time;
 	__u32 filler;
         __u64 values[];
@@ -79,6 +79,10 @@ struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 128 * 4096); // must be a power of 2 and a multiple of 4096 (memory page size)
 } out_rb SEC(".maps");
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 128 * 4096); // see note above
+} inj_rb SEC(".maps");
 
 static __always_inline int count_leading_left_zeroes(__u64 n) {
 
@@ -291,10 +295,10 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
 	       values[k] = signal;
        }
 
-       struct out_record *r;
+       struct model_record *r;
        if (INTERACTIVE == 1 && IS_OUTPUT == 1){
 	       // reserve memory in the ring buffer
-	       r = bpf_ringbuf_reserve(&out_rb, sizeof(struct out_record) + nof_signals * sizeof(__u64), 0);
+	       r = bpf_ringbuf_reserve(&out_rb, sizeof(struct model_record) + nof_signals * sizeof(__u64), 0);
 	       if (r == NULL) {
 		       bpf_printk("Failed to reserve rb memory");
 		       return -1;

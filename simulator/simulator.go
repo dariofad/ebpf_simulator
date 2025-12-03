@@ -75,7 +75,7 @@ func setCycles(spec *ebpf.CollectionSpec, simData my_types.SimFormat) error {
 		log.Printf("Error setting Cycles in spec: %s", err)
 		return err
 	}
-	log.Printf("Cycles :%d", CYCLES)
+	log.Printf("Cycles: %d", CYCLES)
 
 	return nil
 }
@@ -510,7 +510,11 @@ func Start(
 					return
 				case perturbation := <-pertCh:
 					// todo implement injection
-					log.Printf("%v", perturbation)
+					pertRecords, err := extractPerturbationRecords(perturbation, simData)
+					if err != nil {
+						log.Printf("Error converting perturbation into model input records: %v", err)
+					}
+					log.Printf("%v", pertRecords)
 				}
 			}
 		}(ctx, pertCh, probeObjs, errChi, _nof_wi)
@@ -532,6 +536,76 @@ func Start(
 	// terminate
 	wg.Done()
 	return
+}
+
+func extractPerturbationRecords(data map[string]interface{}, simData my_types.SimFormat) ([]my_types.ModelRecord, error) {
+
+	// extract time
+	timeVals := make([]uint32, 0)
+	if rawTime, ok := data["time"].([]interface{}); ok {
+		for _, rawVal := range rawTime {
+			var val int32
+			val, ok := rawVal.(int32)
+			if !ok {
+				_v, ok := rawVal.(int16)
+				if !ok {
+					_v, ok := rawVal.(int8)
+					if !ok {
+						log.Printf("Cannot convert to integer time value %v", rawVal)
+						return nil, errors.New("Cannot convert perturbation time value to integer")
+					} else {
+						val = int32(_v)
+					}
+				} else {
+					val = int32(_v)
+				}
+			}
+			timeVals = append(timeVals, uint32(val))
+		}
+	} else {
+		log.Print("Cannot extract raw values for time")
+		return nil, errors.New("Perturbation extraction error")
+	}
+	signalVals := make(map[string][]float64, 0)
+	// extract signals
+	for signal := range data {
+		if signal == "time" {
+			continue
+		}
+		vals := make([]float64, 0)
+		if rawSignal, ok := data[signal].([]interface{}); ok {
+			for _, rawVal := range rawSignal {
+				val, ok := rawVal.(float64)
+				if !ok {
+					log.Print("Cannot convert to float64 value %v", rawVal)
+					return nil, errors.New("Cannot convert perturbation value to float64")
+				}
+				vals = append(vals, val)
+			}
+		} else {
+			log.Print("Cannot extract raw values for %v", signal)
+			return nil, errors.New("Perturbation extraction error")
+		}
+		signalVals[signal] = vals
+	}
+	// pack into model records and return
+	pertRecords := make([]my_types.ModelRecord, 0)
+	for p, v := range timeVals {
+		var record my_types.ModelRecord
+		record.Time = v
+		record.Filler = 0
+		record.Values = make([]float64, 0)
+		for _, signal := range simData.WTimingI.Signals {
+			if vals, ok := signalVals[signal.SignName]; ok {
+				record.Values = append(record.Values, vals[p])
+			} else {
+				// append zero
+				record.Values = append(record.Values, 0)
+			}
+		}
+		pertRecords = append(pertRecords, record)
+	}
+	return pertRecords, nil
 }
 
 func asyncMonitorSimulation(wg *sync.WaitGroup, errCh chan<- error, ctx context.Context, probeObjs probeObjects, _nof_ro uint32) {
@@ -560,7 +634,7 @@ func monitorSimulation(ctx context.Context, probeObjs probeObjects, _nof_ro uint
 	}
 	defer rbReader.Close()
 	// Read events from the ring buffer and write them to Redis
-	var records []my_types.OutRecord
+	var records []my_types.ModelRecord
 	var writtenRecords uint32 = 0
 	simulationKey := "simulation:" + simulationId
 	for {
@@ -579,7 +653,7 @@ func monitorSimulation(ctx context.Context, probeObjs probeObjects, _nof_ro uint
 				_tbuf := bytes.NewReader(raw[8+p*8 : 16+p*8])
 				binary.Read(_tbuf, binary.LittleEndian, &_vals[p])
 			}
-			oRec := my_types.OutRecord{
+			oRec := my_types.ModelRecord{
 				Time:   binary.LittleEndian.Uint32(raw),
 				Values: _vals,
 			}
@@ -594,7 +668,7 @@ func monitorSimulation(ctx context.Context, probeObjs probeObjects, _nof_ro uint
 			}
 			// Empty local record slice
 			writtenRecords += uint32(len(records))
-			records = []my_types.OutRecord{}
+			records = []my_types.ModelRecord{}
 		}
 	}
 	if len(records) != 0 {
@@ -604,14 +678,14 @@ func monitorSimulation(ctx context.Context, probeObjs probeObjects, _nof_ro uint
 		}
 		// Empty local record slice
 		writtenRecords += uint32(len(records))
-		records = []my_types.OutRecord{}
+		records = []my_types.ModelRecord{}
 	}
 
 	return nil
 }
 
 // Writes a slice of records to Redis
-func writeToRedis(ctx context.Context, redisClient *redis.Client, simulationKey string, records []my_types.OutRecord) error {
+func writeToRedis(ctx context.Context, redisClient *redis.Client, simulationKey string, records []my_types.ModelRecord) error {
 
 	// convert records to string representation and add them to a Redis sorted set
 	var z []redis.Z

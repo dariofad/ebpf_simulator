@@ -109,7 +109,7 @@ func Start(
 	rawTrajectory map[string]interface{},
 	errCh chan error,
 	resCh chan my_types.OutputTrace,
-	pertCh chan map[string]interface{},
+	pertCh <-chan map[string]interface{},
 	wg *sync.WaitGroup,
 ) {
 
@@ -494,14 +494,29 @@ func Start(
 	case my_types.StatePerturbation:
 		// todo implement
 	case my_types.SignalPerturbation:
-		// monitor model
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		wgm := &sync.WaitGroup{}
 		wgm.Add(1)
 		errChm := make(chan error, 1)
 		defer close(errChm)
+		errChi := make(chan error, 1)
+		defer close(errChi)
+		// apply signal perturbation
+		go func(ctx context.Context, pertCh <-chan map[string]interface{}, probeObjs probeObjects, errCh chan error, _nof_wi uint32) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case perturbation := <-pertCh:
+					// todo implement injection
+					log.Printf("%v", perturbation)
+				}
+			}
+		}(ctx, pertCh, probeObjs, errChi, _nof_wi)
+		// monitor simulation
 		go asyncMonitorSimulation(wgm, errChm, ctx, probeObjs, _nof_ro)
-		// perturbate signals (todo implement)
+
 		// wait for simulation to terminate
 		wgm.Wait()
 		// return the error if occured, otherwise send simulation task terminated

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -60,7 +61,7 @@ func timeTrack(start time.Time, name string) {
 
 // Reads the connection incoming data. Returns the received data
 // length (in bytes), and the related byte array
-func getData(conn net.Conn) (uint32, []byte, error) {
+func getData(ctx context.Context, conn net.Conn) (uint32, []byte, error) {
 
 	defer timeTrack(time.Now(), "getData()")
 
@@ -68,11 +69,18 @@ func getData(conn net.Conn) (uint32, []byte, error) {
 	var dataLenBuf [4]byte
 	n, err := conn.Read(dataLenBuf[:])
 	if err != nil || n != 4 {
-		log.Println("Data length read error:",
-			err,
-			"bytes read:",
-			n)
-		return 0, nil, err
+		select {
+		case <-ctx.Done():
+			log.Print("getData() stopped due to end of simulation")
+			return 0, nil, nil
+		default:
+			log.Println("Data length read error:",
+				err,
+				"bytes read:",
+				n)
+			return 0, nil, err
+
+		}
 	}
 	dataLen := binary.BigEndian.Uint32(dataLenBuf[:])
 	if VERBOSE {
@@ -170,7 +178,7 @@ func handleMonitoring(conn net.Conn) {
 	defer unlockServer()
 
 	// read raw data
-	dataLen, rawData, err := getData(conn)
+	dataLen, rawData, err := getData(context.Background(), conn)
 	if err != nil {
 		return
 	}
@@ -195,8 +203,8 @@ func handleMonitoring(conn net.Conn) {
 		log.Println("Cannot handle monitoring task:", err)
 		return
 	default:
-		log.Println("Monitoring Monitoring started")
-		sendSimulationEndedAck(conn)
+		log.Println("Monitoring Monitoring ended")
+		sendSimulationAck(conn, []byte("Simulation ended"))
 	}
 }
 
@@ -209,7 +217,7 @@ func handleFalsification(conn net.Conn) {
 	defer unlockServer()
 
 	// read raw data
-	dataLen, rawData, err := getData(conn)
+	dataLen, rawData, err := getData(context.Background(), conn)
 	if err != nil {
 		return
 	}
@@ -253,6 +261,31 @@ func handleFalsification(conn net.Conn) {
 	}
 }
 
+func readPerturbationFromNet(ctx context.Context, conn net.Conn, ch chan<- map[string]interface{}) {
+
+	for {
+		// read data from network
+		dataLen, rawData, err := getData(ctx, conn)
+		if err != nil {
+			return
+		}
+		_ = dataLen
+		// deserialize data (contains a vector named "time" to index data points)
+		if dataLen == 0 {
+			return
+		}
+		rawPerturbation, err := deserialize(rawData)
+		if err != nil {
+			return
+		}
+		_ = rawPerturbation
+		// send ack to client
+		sendSimulationAck(conn, []byte("Perturbation received correctly"))
+		// send data to the injector via channel
+		ch <- rawPerturbation
+	}
+}
+
 // todo: implement
 func handleStatePerturbation(conn net.Conn) {
 
@@ -270,7 +303,7 @@ func handleSignalPerturbation(conn net.Conn) {
 	defer unlockServer()
 
 	// read the input trace
-	dataLen, rawData, err := getData(conn)
+	dataLen, rawData, err := getData(context.Background(), conn)
 	if err != nil {
 		return
 	}
@@ -282,8 +315,6 @@ func handleSignalPerturbation(conn net.Conn) {
 		return
 	}
 
-	// create the perturbation communication channel
-	pertCh := make(chan map[string]interface{}, 1024*1024*64) // 32 MB buffer
 	// wg for synchronization
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
@@ -292,6 +323,9 @@ func handleSignalPerturbation(conn net.Conn) {
 	defer close(errCh)
 	resCh := make(chan my_types.OutputTrace, 1)
 	defer close(resCh)
+	// create the perturbation communication channel
+	pertCh := make(chan map[string]interface{}, 1024*1024*64) // 32 MB buffer
+	defer close(pertCh)
 	// start the simulation (async)
 	go simulator.Start(my_types.SignalPerturbation, rawTrajectory, errCh, resCh, pertCh, wg)
 	// helper to check simulation ended without blocking
@@ -300,12 +334,18 @@ func handleSignalPerturbation(conn net.Conn) {
 		wg.Wait()
 		close(done)
 	}()
-waitSimulation:
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// start perturbation network listener
+	go readPerturbationFromNet(ctx, conn, pertCh)
+	// send perturbation started ack to client (so client can send the perturbation...)
+	sendSimulationAck(conn, []byte("Simulation started"))
+simulateAndPerturb:
 	for {
 		select {
 		case <-done:
 			log.Printf("Simulation ended, checking result...")
-			break waitSimulation
+			break simulateAndPerturb
 		default:
 			log.Print("Keep waiting for the end of the simulation")
 			// listen and inject data
@@ -320,6 +360,7 @@ waitSimulation:
 	default:
 		// no error
 		log.Println("Simulation finished without errors")
+		sendSimulationAck(conn, []byte("Simulation ended without errors"))
 		return
 	}
 }
@@ -348,9 +389,17 @@ func setWriteDeadline(conn net.Conn, seconds uint32) error {
 	return conn.SetWriteDeadline(time.Now().Add(time.Duration(seconds)))
 }
 
-func sendSimulationEndedAck(conn net.Conn) {
+func sendSimulationAck(conn net.Conn, msg []byte) {
 
-	_, err := conn.Write([]byte("Simulation ended"))
+	maxMsgSize := 64
+	paddedMsg := make([]byte, maxMsgSize)
+	for p, v := range msg {
+		if p > maxMsgSize {
+			break
+		}
+		paddedMsg[p] = v
+	}
+	_, err := conn.Write(paddedMsg)
 	if err != nil {
 		log.Print("Error writing response", err)
 	}

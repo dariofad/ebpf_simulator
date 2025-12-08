@@ -6,6 +6,10 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
+#define DRAIN_SINGLE_POINT 1
+
+const __u32 MAX_NOF_SIGNALS = 16;
+
 // interactivity
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -23,8 +27,6 @@ volatile const __u32 NOF_WISIGNALS;
 volatile const __u32 NOF_RISIGNALS;
 volatile const __u32 NOF_ROSIGNALS;
 
-const __u32 MAX_NOF_SIGNALS = 16;
-
 // timing
 volatile const __u32 MINOR_TO_MAJOR_RATIO;
 __u32 minor_step = 0;
@@ -32,6 +34,8 @@ __u32 IS_MAJOR = 0;
 __u32 time = 0;
 __u32 log_counter = 0;
 volatile const __u32 MAX_CYCLES;
+
+__u64 stash[16]; // hardcoded 
 
 // -----------------------------------------------------------------------
 // MAPS TO STORE SIGNALS
@@ -79,8 +83,13 @@ struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 128 * 4096); // must be a power of 2 and a multiple of 4096 (memory page size)
 } out_rb SEC(".maps");
+struct pert_record { // todo: use a structure with dynamic len
+	__u32 time;
+	__u32 filler;
+        __u64 values[8]; // hardcoded
+};
 struct {
-	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(type, BPF_MAP_TYPE_USER_RINGBUF);
 	__uint(max_entries, 128 * 4096); // see note above
 } inj_rb SEC(".maps");
 
@@ -183,7 +192,7 @@ static __u64 ieee754_add(__u64 a, __u64 b) {
 
         // overflow occurred
 	if (e_res > 2046 || e_res < 0) {
-		bpf_printk("OP RESULTED IN OVERFLOW");
+		bpf_printk("\tERR: OP RESULTED IN OVERFLOW");
 		return 0ULL;
 	}
 	
@@ -215,41 +224,110 @@ static __u64 ieee754_sub(__u64 a, __u64 b) {
 	return ieee754_add(a, b);
 }
 
+struct i_loop_ctx {
+        __u32 time;
+	__u64 inj_pert;        
+};
+
+static long inj_signals(u64 index, void *_ctx) {
+
+	struct i_loop_ctx *ctx = _ctx;
+        __u32 skey = (__u32)index;
+
+	void *sign_trace = bpf_map_lookup_elem(&tracee_map, &skey);
+	if (!sign_trace){
+		bpf_printk("\tERR retrieving sign_trace map");
+		return 1;
+	}        
+ 
+	// get the perturbation value
+	__u64 *pert = bpf_map_lookup_elem(sign_trace, &(ctx->time));
+	if (!pert) {
+		bpf_printk("\tERR retrieving the signal trace (urb draining)");
+		return 1;
+	} else {
+                // add injected value to initial perturbation
+                bpf_printk("\tsign_key %d, initial: %llu, added: %llu", skey, *pert, ctx->inj_pert);
+		ctx->inj_pert = ieee754_add(ctx->inj_pert, *pert);
+		int err = bpf_map_update_elem(sign_trace, &(ctx->time), &(ctx->inj_pert), BPF_ANY);
+	        if (err != 0) {
+			bpf_printk("\t\t-> failed injection, ERR: %d", err);
+			return 1;
+                } else {
+			bpf_printk("\t\t-> successful injection");
+                }
+ 	}        
+        
+	return 0;        
+}        
+
+static long extract_injected_pert(struct bpf_dynptr *dynptr, __u32 *_nof_pert_signals) {
+
+	struct pert_record *DRAINED_RECORD;        
+        DRAINED_RECORD = bpf_dynptr_data(dynptr, 0, 8 + 8 * 8);
+	if (!DRAINED_RECORD) {
+		return 0;
+        }
+        __u32 thr = *_nof_pert_signals;
+
+        struct i_loop_ctx ctx = {
+            .time = DRAINED_RECORD->time,
+        };
+
+       __u32 actual_time = time - 1;
+       if (actual_time > DRAINED_RECORD->time){
+	       bpf_printk("RUNTIME PERTURBATION INJECTION, time: %d [late]", actual_time);
+	       return DRAIN_SINGLE_POINT;
+       } else {
+	       bpf_printk("RUNTIME PERTURBATION INJECTION, time: %d [on time] (alters time: %d)", actual_time, DRAINED_RECORD->time);
+       }               
+
+        #pragma unroll
+	for (int i = 0; i < 8; ++i) { // hardcoded
+		if (i >= NOF_WISIGNALS)
+			break;
+		ctx.inj_pert = DRAINED_RECORD->values[i];
+                inj_signals(i, &ctx);
+	}		
+	
+        return DRAIN_SINGLE_POINT;        
+}
+
+
 SEC("uretprobe/timer")
 int uprobe_timer() {
 
 	// determine if the current cyclic is a major step
 	if (minor_step % MINOR_TO_MAJOR_RATIO == 0){
 		IS_MAJOR = 1;
-		time++;		
+                time++;
 	} else {
 		IS_MAJOR = 0;
 	}
 	minor_step++;	
 	if (time > MAX_CYCLES) {
-		bpf_printk("Logged %d records", log_counter-1);
-		bpf_printk("SIGKILL sent to process");
+		bpf_printk("\tLOGGED %d RECORDS", log_counter-1);
+		bpf_printk("\tSIGKILL SENT TO PROCESS");
 		bpf_send_signal(SIGKILL);
 		return 0;
 	}
 	return 0;
 }
 
-static inline int copy_to_pinned_map(__u32 actual_time, __u32 key, __u64 signal) {
+static inline int copy_user_space_value_to_map(__u32 actual_time, __u32 key, __u64 signal) {
 
-	bpf_printk("Retrieving trace for signal %d", key);
 	struct m_signal *sign_trace = (struct m_signal *)bpf_map_lookup_elem(&tracee_map, &key);
 	if (sign_trace == NULL){
-		bpf_printk("ERR retrieving sign_trace map");			
+		bpf_printk("\tERR retrieving sign_trace map");			
 		return -1;
 	}
 	// update the signal trace
 	int err = bpf_map_update_elem(sign_trace, &actual_time, &signal, BPF_ANY);
 	if (err != 0) {
-		       bpf_printk("Cannot write signal %d to trace", key);
-		       return -1;
+		bpf_printk("\tERR, cannot copy value of sign_key %d to trace", key);
+		return -1;
 	} else {
-		       bpf_printk("Signal %d written to trace, value: %llu", key, signal);
+		bpf_printk("\t\t-> value copied to trace");
 	}
 	return 0;
 }
@@ -257,42 +335,55 @@ static inline int copy_to_pinned_map(__u32 actual_time, __u32 key, __u64 signal)
 static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUTPUT) {
 
 	if (nof_signals > MAX_NOF_SIGNALS){
-		bpf_printk("Too many signals to read");
+		bpf_printk("\tERR, too many signals to read");
 		return -1;
 	}
 
 	// determine the correct simulation time
        __u32 actual_time = time - 1;
-       bpf_printk("READ, actual time: %d", actual_time);
-
+       // check interactivity
        __u16 INTERACTIVE = get_interactive();
-       __u64 values[16];
-
-       bpf_printk("nof_signals: %d", nof_signals);
-
+       // clean stash (hardcoded)
+       stash[0] = 0;
+       stash[1] = 0;
+       stash[2] = 0;
+       stash[3] = 0;
+       stash[4] = 0;
+       stash[5] = 0;
+       stash[6] = 0;
+       stash[7] = 0;
+       stash[8] = 0;
+       stash[9] = 0;
+       stash[10] = 0;
+       stash[11] = 0;
+       stash[12] = 0;
+       stash[13] = 0;
+       stash[14] = 0;
+       stash[15] = 0;       
+       
+       bpf_printk("\tnof signals to read: %d", nof_signals);
        for (__u32 k = 0; k < MAX_NOF_SIGNALS; k++){
 	       if (k >= nof_signals)
 		       break;
 	       __u32 key = k + key_offset;
-	       bpf_printk("signal key: %d", key);
 	       // get the signal address
 	       __u64 *address = bpf_map_lookup_elem(&address_map, &key);
 	       if (!address){
-		       bpf_printk("ERR retrieving address from address_map");
+		       bpf_printk("\tERR retrieving address from address_map");
 		       return -1;
 	       }
 	       // read the signal from user space
 	       __u64 signal = 0;
 	       if (bpf_probe_read_user(&signal, sizeof(signal), (void *)(*address)) == 0) {
-		       bpf_printk("Signal %d from user space: %llu", key, signal);
+		       bpf_printk("\tsign_key %d from user space: %llu (address: %llu)", key, signal, *address);
 	       } else {
-		       bpf_printk("Failed to read signal");
+		       bpf_printk("\tERR, failed to read signal");
 		       return -1;
 	       }
 	       if (INTERACTIVE == 0 || IS_OUTPUT == 0){
-		       copy_to_pinned_map(actual_time, key, signal);
+		       copy_user_space_value_to_map(actual_time, key, signal);
 	       }
-	       values[k] = signal;
+	       stash[k] = signal;
        }
 
        struct model_record *r;
@@ -300,7 +391,7 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
 	       // reserve memory in the ring buffer
 	       r = bpf_ringbuf_reserve(&out_rb, sizeof(struct model_record) + nof_signals * sizeof(__u64), 0);
 	       if (r == NULL) {
-		       bpf_printk("Failed to reserve rb memory");
+		       bpf_printk("\tERR, failed to reserve rb memory");
 		       return -1;
 	       }
 	       r->time = actual_time;
@@ -310,11 +401,11 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
 	       // verifier
 	       for (__u32 k = 0; k < MAX_NOF_SIGNALS; k++){
 		       if (k < nof_signals)
-			       r->values[k] = values[k];
+			       r->values[k] = stash[k];
 	       }
 	       // commit to the rb
 	       bpf_ringbuf_submit(r, BPF_RB_NO_WAKEUP);
-	       bpf_printk("Record committed to the ring buffer");
+	       bpf_printk("\t\t-> output record committed to the ring buffer");
       }
       return 0;	
 }
@@ -324,7 +415,9 @@ int uprobe_read_i() {
 
         if (!IS_MAJOR){ // skip the rest of the program if not major step
 		return 0;
-	} else {
+        } else {
+		__u32 actual_time = time - 1;
+		bpf_printk("READ_INPUT, time: %d", actual_time);
 		return read_signals(NOF_RISIGNALS, NOF_WISIGNALS, 0);
 	}
 }
@@ -334,7 +427,9 @@ int uprobe_read_o() {
 
         if (!IS_MAJOR){ // skip the rest of the program if not major step
 		return 0;
-	} else {
+        } else {
+		__u32 actual_time = time - 1;
+		bpf_printk("READ_OUTPUT, time: %d", actual_time);
 		log_counter += 1;
 		return read_signals(NOF_ROSIGNALS, NOF_WISIGNALS + NOF_RISIGNALS, 1);
 	}
@@ -345,53 +440,52 @@ struct w_loop_ctx {
 };
 
 static long write_signals(u64 index, void *_ctx) {
-	
+
 	struct w_loop_ctx *ctx = _ctx;
 	__u32 skey = (__u32)index;
 
 	// get the signal trace
-	bpf_printk("Retrieving perturbation trace for signal %d", skey);
 	void *sign_trace = bpf_map_lookup_elem(&tracee_map, &skey);
 	if (!sign_trace){
-		bpf_printk("ERR retrieving sign_trace map");
+		bpf_printk("\tERR retrieving sign_trace map");
 		return 1;
 	}
 	// get the perturbation value
 	__u64 *pert = bpf_map_lookup_elem(sign_trace, &(ctx->actual_time));
 	if (!pert){
-		bpf_printk("Error reading signal %d pert", skey);
+		bpf_printk("\tERR reading sign_key %d pert", skey);
 		return 1;
 	} else {
-		bpf_printk("Signal %d perturbation: %llu", skey, *pert);
+		bpf_printk("\tsign_key %d pert: %llu", skey, *pert);
 	}
 
 	// get the signal address
 	__u64 *address = bpf_map_lookup_elem(&address_map, &skey);
 	if (!address){
-		bpf_printk("ERR retrieving address from address_map");
+		bpf_printk("\tERR retrieving address from address_map");
 		return 1;
 	}
 		
 	// read the signal from user space
 	__u64 sign = 0;
 	if (bpf_probe_read_user(&sign, sizeof(sign), (void *)(*address)) == 0) {
-		bpf_printk("Signal %d from user space: %llu", skey, sign);
+		bpf_printk("\tsign_key %d from user space: %llu", skey, sign);
 	} else {
-		bpf_printk("Failed to read signal %d from user space", skey);
+		bpf_printk("\tERR, failed to read sign_key %d from user space", skey);
 		return 1;
 	}
 
 	// add perturbation to signal
 	sign = ieee754_add(sign, *pert);
-	bpf_printk("New value after perturbation: %llu", sign);
 	
 	// overwrite signal in user space
-	long err = bpf_probe_write_user((void *)(address), &sign, 8);
-
+        long err = bpf_probe_write_user((void *)(*address), &sign, 8);
 	if (err != 0) {
-		bpf_printk("Failed to overwrite signal %k, err: %ld", skey, err);
+		bpf_printk("\tERR, failed to overwrite signal %k in user space, err: %ld", skey, err);
 		return 1;
-	}
+        } else {
+		bpf_printk("\t\t-> new user space value set to: %llu", sign);
+        }
 
 	return 0;
 }
@@ -401,22 +495,26 @@ int uprobe_write_i() {
 
         if (!IS_MAJOR){ // skip the rest of the program if not major step
 		return 0;
-	} else {
-		if (NOF_WISIGNALS > MAX_NOF_SIGNALS){
-			bpf_printk("Too many signals to write");
+        } else {
+		if (NOF_WISIGNALS > 8){ // hardcoded
+			bpf_printk("\tERR, too many signals to write");
 			return -1;
 		}
 
 		__u32 actual_time = time - 1;
-		bpf_printk("WRITE, actual time %d", actual_time);
-		bpf_printk("signals to write: %d", NOF_WISIGNALS);
+                
+                // check runtime injection available (DRAIN)
+		__u32 _nof_pert_signals = NOF_WISIGNALS;
+                long ret = bpf_user_ringbuf_drain(
+                    &inj_rb, extract_injected_pert, &_nof_pert_signals, 0);
 
+                // write perturbation to user space
+                bpf_printk("WRITE, time: %d, nof signals to perturbate: %d", actual_time, NOF_WISIGNALS);
 		struct w_loop_ctx ctx = {
 			.actual_time = actual_time,
 		};
-
 		#pragma unroll
-		for (int i = 0; i < MAX_NOF_SIGNALS; ++i) {
+		for (int i = 0; i < 8; ++i) { // hardcoded
 			if (i >= NOF_WISIGNALS)
 				break;
 			write_signals(i, &ctx);			

@@ -349,7 +349,7 @@ simulateAndPerturb:
 		default:
 			log.Print("Keep waiting for the end of the simulation")
 			// listen and inject data
-			time.Sleep(1 * time.Second)
+			time.Sleep(3 * time.Second)
 		}
 	}
 	// check no errors occurred

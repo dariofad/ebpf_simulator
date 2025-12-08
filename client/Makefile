@@ -16,4 +16,6 @@ falsification1:
 .PHONY: signpert2
 signpert2:
 	cp ../simulator/2_config.json ../simulator/config.json
+	chmod +x ../simulator/_utils/list_signals.py
+	../simulator/_utils/list_signals.py < ../simulator/config.json
 	python3 sign_perturbation.py 127.0.0.1

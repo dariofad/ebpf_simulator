@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
@@ -502,20 +503,69 @@ func Start(
 		defer close(errChm)
 		errChi := make(chan error, 1)
 		defer close(errChi)
+		// pin the user space ringbuf
+		pertRBPath := "/sys/fs/bpf/pertbuf"
+		if err := probeObjs.InjRb.Pin(pertRBPath); err != nil {
+			log.Printf("Cannot pin perturbation buffer at %v", pertRBPath)
+			errCh <- err
+			wg.Done()
+			return
+		}
+		// defer unpinnning
+		defer func() {
+			if err := probeObjs.InjRb.Unpin(); err != nil {
+				log.Printf("Cannot unpin perturbation buffer: %v", err)
+			}
+		}()
+
 		// apply signal perturbation
 		go func(ctx context.Context, pertCh <-chan map[string]interface{}, probeObjs probeObjects, errCh chan error, _nof_wi uint32) {
+
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case perturbation := <-pertCh:
-					// todo implement injection
+					// extract perturbation records
 					pertRecords, err := extractPerturbationRecords(perturbation, simData)
 					if err != nil {
 						log.Printf("Error converting perturbation into model input records: %v", err)
 					}
-					log.Printf("%v", pertRecords)
+					// write records to a temp file (todo: improve)
+					tempFile, err := os.CreateTemp("", "model_records_*.bin")
+					if err != nil {
+						log.Printf("Cannot create temporary inject file: %v", err)
+						break
+					}
+					defer tempFile.Close()
+					for _, r := range pertRecords {
+						binary.Write(tempFile, binary.LittleEndian, r.Time)
+						binary.Write(tempFile, binary.LittleEndian, r.Filler)
+						for _, v := range r.Values {
+							binary.Write(tempFile, binary.LittleEndian, math.Float64bits(v))
+						}
+					}
+
+					// call the injector
+					enableInjectorVerbosity := "0"
+					if VERBOSE {
+						enableInjectorVerbosity = "1"
+					}
+					injCmd := exec.Command(
+						"sudo",
+						"./simulator/injector",
+						strconv.FormatInt(int64(_nof_wi), 10),
+						tempFile.Name(),
+						enableInjectorVerbosity,
+					)
+					injCmd.Stdout = os.Stdout
+					injCmd.Stderr = os.Stderr
+					if err = injCmd.Run(); err != nil {
+						log.Printf("Injector cmd failed: %v", err)
+						break
+					}
 				}
+
 			}
 		}(ctx, pertCh, probeObjs, errChi, _nof_wi)
 		// monitor simulation
@@ -594,10 +644,10 @@ func extractPerturbationRecords(data map[string]interface{}, simData my_types.Si
 		var record my_types.ModelRecord
 		record.Time = v
 		record.Filler = 0
-		record.Values = make([]float64, 0)
-		for _, signal := range simData.WTimingI.Signals {
+		record.Values = make([]float64, len(simData.WTimingI.Signals))
+		for signal_pos, signal := range simData.WTimingI.Signals {
 			if vals, ok := signalVals[signal.SignName]; ok {
-				record.Values = append(record.Values, vals[p])
+				record.Values[signal_pos] = vals[p]
 			} else {
 				// append zero
 				record.Values = append(record.Values, 0)

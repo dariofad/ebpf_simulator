@@ -22,6 +22,6 @@ func main() {
 			log.Fatalf("Error: Invalid uint64 value '%s'", u64Str)
 		}
 		res := math.Float64frombits(u64Val)
-		log.Printf("v:\t%s, IEEE 754 float:\t%.3f", u64Str, res)
+		log.Printf("v:\t%s, IEEE 754 float:\t%.5f", u64Str, res)
 	}
 }

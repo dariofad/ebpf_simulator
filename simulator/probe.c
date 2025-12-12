@@ -74,6 +74,7 @@ struct {
 // signals
 const __u16 SIGKILL = 9;
 
+// kernel -> user space ring buffer
 struct model_record {
 	__u32 time;
 	__u32 filler;
@@ -83,6 +84,8 @@ struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 128 * 4096); // must be a power of 2 and a multiple of 4096 (memory page size)
 } out_rb SEC(".maps");
+
+// user -> kernel space ring buffer for noise injection
 struct pert_record { // todo: use a structure with dynamic len
 	__u32 time;
 	__u32 filler;
@@ -92,6 +95,29 @@ struct {
 	__uint(type, BPF_MAP_TYPE_USER_RINGBUF);
 	__uint(max_entries, 128 * 4096); // see note above
 } inj_rb SEC(".maps");
+
+// user -> kernel space ring buffer to dynamically change the state
+struct state_record {
+	__u32 time;
+	__u32 value_size;
+        __u64 addr;
+        __u64 value;
+};
+struct state_record_trimmed {
+        __u64 addr;
+        __u64 value;        
+};
+struct {
+	__uint(type, BPF_MAP_TYPE_USER_RINGBUF);
+	__uint(max_entries, 4096);
+} state_rb SEC(".maps");
+// state array map
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u32);
+    __type(value, struct state_record_trimmed);
+} state_trace SEC(".maps");
 
 static __always_inline int count_leading_left_zeroes(__u64 n) {
 
@@ -276,10 +302,10 @@ static long extract_injected_pert(struct bpf_dynptr *dynptr, __u32 *_nof_pert_si
 
        __u32 actual_time = time - 1;
        if (actual_time > DRAINED_RECORD->time){
-	       bpf_printk("RUNTIME PERTURBATION INJECTION, time: %d [late]", actual_time);
+	       bpf_printk("LIVE PERTURBATION, time: %d [late]", actual_time);
 	       return DRAIN_SINGLE_POINT;
        } else {
-	       bpf_printk("RUNTIME PERTURBATION INJECTION, time: %d [on time] (alters time: %d)", actual_time, DRAINED_RECORD->time);
+	       bpf_printk("LIVE PERTURBATION, time: %d [on time] (affects time: %d)", actual_time, DRAINED_RECORD->time);
        }               
 
         #pragma unroll
@@ -290,9 +316,41 @@ static long extract_injected_pert(struct bpf_dynptr *dynptr, __u32 *_nof_pert_si
                 inj_signals(i, &ctx);
 	}		
 	
-        return DRAIN_SINGLE_POINT;        
+        return DRAIN_SINGLE_POINT;
 }
 
+static long extract_injected_state_pert(struct bpf_dynptr *dynptr, __u32 placeholder) {
+
+	struct state_record *DRAINED_RECORD;        
+        DRAINED_RECORD = bpf_dynptr_data(dynptr, 0, 8 + 2 * 8);
+	if (!DRAINED_RECORD) {
+		return 0;
+        }
+
+       __u32 actual_time = time - 1;
+       if (actual_time > DRAINED_RECORD->time){
+	       bpf_printk("LIVE STATE PERTURBATION, time: %d [late]", actual_time);
+	       return DRAIN_SINGLE_POINT;
+       } else {
+	       bpf_printk("LIVE STATE PERTURBATION, time: %d [on time] (affects time: %d)", actual_time, DRAINED_RECORD->time);
+       }
+
+       struct state_record_trimmed srt = {
+           .addr = DRAINED_RECORD->addr,
+           .value = DRAINED_RECORD->value,
+       };
+       // transfer the state record to a map
+       int err = bpf_map_update_elem(&state_trace, &DRAINED_RECORD->time, &srt,
+                                     BPF_ANY);
+       if (err != 0) {
+	       bpf_printk("\tERR: cannot save the state perturbation at time %d", DRAINED_RECORD->time);
+       } else {
+               bpf_printk("\t-> saved value: %llu (address: %llu)", srt.value,
+                          srt.addr);
+       }               
+       
+       return DRAIN_SINGLE_POINT;        
+}
 
 SEC("uretprobe/timer")
 int uprobe_timer() {
@@ -501,15 +559,39 @@ int uprobe_write_i() {
 			return -1;
 		}
 
-		__u32 actual_time = time - 1;
-                
+                __u32 actual_time = time - 1;
+
+                // check runtime state injection available (STATE DRAIN)
+		__u32 placeholder = 0;
+                bpf_user_ringbuf_drain(
+                    &state_rb, extract_injected_state_pert, &placeholder, 0);
+
                 // check runtime injection available (DRAIN)
 		__u32 _nof_pert_signals = NOF_WISIGNALS;
-                long ret = bpf_user_ringbuf_drain(
+                bpf_user_ringbuf_drain(
                     &inj_rb, extract_injected_pert, &_nof_pert_signals, 0);
 
-                // write perturbation to user space
-                bpf_printk("WRITE, time: %d, nof signals to perturbate: %d", actual_time, NOF_WISIGNALS);
+                // write perturbations to user space
+                bpf_printk("WRITE, time: %d, nof signals to perturbate: %d",
+                           actual_time, NOF_WISIGNALS);
+                // write state perturbation to user space
+                // state
+		struct state_record_trimmed *srt =
+			bpf_map_lookup_elem(&state_trace, &actual_time);
+		if (srt == 0){
+			bpf_printk("-> no state perturbation applicable");
+		} else {
+			// write state perturbation to user space
+			long err = bpf_probe_write_user((void *)(srt->addr), &(srt->value), 8);
+			if (err != 0) {
+				bpf_printk("\tERR, failed to write state perturbation to user space, err: %d", err);
+			} else {
+                                bpf_printk("-> used state perturbation, "
+                                           "value: %llu (address: %llu)",
+                                           srt->value, srt->addr);
+			}                                
+		}        
+                // signals                
 		struct w_loop_ctx ctx = {
 			.actual_time = actual_time,
 		};

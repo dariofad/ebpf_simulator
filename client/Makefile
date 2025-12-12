@@ -19,3 +19,10 @@ signpert2:
 	chmod +x ../simulator/_utils/list_signals.py
 	../simulator/_utils/list_signals.py < ../simulator/config.json
 	python3 sign_perturbation.py 127.0.0.1
+
+.PHONY: statepert2
+statepert2:
+	cp ../simulator/3_config.json ../simulator/config.json
+	chmod +x ../simulator/_utils/list_signals.py
+	../simulator/_utils/list_signals.py < ../simulator/config.json
+	python3 state_perturbation.py 127.0.0.1

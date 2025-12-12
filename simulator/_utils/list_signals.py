@@ -30,6 +30,10 @@ if READ_TIMING_O:
     summarize_signals(READ_TIMING_O["SIGNALS"], NOF_WI + NOF_RI)
     NOF_RO = len(READ_TIMING_O["SIGNALS"])        
 
-print("SIGNAL RECAP:")    
+print("SIGNAL RECAP:")
+max_sign_name_len = max([len(n) for n in TABLE.keys()]) + 1
 for sign_name in TABLE.keys():
-    print(f"\t{sign_name}:\t{TABLE[sign_name]}")
+    snames = str(TABLE[sign_name])
+    rjust_rx = snames.rjust(12)
+    ljust_sx = (sign_name + ":").ljust(max_sign_name_len)
+    print(f"\t{ljust_sx}{rjust_rx}")

@@ -11,6 +11,13 @@ type ModelRecord struct {
 	Values []float64
 }
 
+type StateRecord struct {
+	Time      uint32  `msgpack:"TIME"`
+	ValueSize uint32  `msgpack:"VALUE_SIZE"`
+	Addr      uint64  `msgpack:"ADDR"`
+	Value     float64 `msgpack:"VALUE"`
+}
+
 func ModelRecordToCSVString(record ModelRecord) string {
 
 	var tmp bytes.Buffer

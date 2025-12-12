@@ -111,6 +111,7 @@ func Start(
 	errCh chan error,
 	resCh chan my_types.OutputTrace,
 	pertCh <-chan map[string]interface{},
+	statePertCh <-chan []my_types.StateRecord,
 	wg *sync.WaitGroup,
 ) {
 
@@ -493,7 +494,87 @@ func Start(
 		//log.Printf("outsignals %v", outSignals)
 		resCh <- outSignals
 	case my_types.StatePerturbation:
-		// todo implement
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		wgm := &sync.WaitGroup{}
+		wgm.Add(1)
+		errChm := make(chan error, 1)
+		defer close(errChm)
+		errChi := make(chan error, 1)
+		defer close(errChi)
+		// pin the user space ringbuf
+		pertRBPath := "/sys/fs/bpf/state_pertbuf"
+		if err := probeObjs.StateRb.Pin(pertRBPath); err != nil {
+			log.Printf("Cannot pin state perturbation buffer at %v", pertRBPath)
+			errCh <- err
+			wg.Done()
+			return
+		}
+		// defer unpinnning
+		defer func() {
+			if err := probeObjs.StateRb.Unpin(); err != nil {
+				log.Printf("Cannot unpin state perturbation buffer: %v", err)
+			}
+		}()
+
+		// apply state perturbation
+		go func(ctx context.Context, statePertCh <-chan []my_types.StateRecord, probeObjs probeObjects, errCh chan error) {
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case perturbation := <-statePertCh:
+					// write records to a temp file
+					tempFile, err := os.CreateTemp("", "model_state_records_*.bin")
+					if err != nil {
+						log.Printf("Cannot create temporary inject file for state records: %v", err)
+						break
+					}
+					defer tempFile.Close()
+					for _, r := range perturbation {
+						binary.Write(tempFile, binary.LittleEndian, r.Time)
+						binary.Write(tempFile, binary.LittleEndian, r.ValueSize)
+						binary.Write(tempFile, binary.LittleEndian, r.Addr)
+						binary.Write(tempFile, binary.LittleEndian, r.Value)
+					}
+
+					// call the injector
+					enableInjectorVerbosity := "0"
+					if VERBOSE {
+						enableInjectorVerbosity = "1"
+					}
+					injCmd := exec.Command(
+						"sudo",
+						"./simulator/state_injector",
+						tempFile.Name(),
+						enableInjectorVerbosity,
+					)
+					injCmd.Stdout = os.Stdout
+					injCmd.Stderr = os.Stderr
+					if err = injCmd.Run(); err != nil {
+						log.Printf("Injector cmd failed: %v", err)
+						break
+					}
+				}
+
+			}
+		}(ctx, statePertCh, probeObjs, errChi)
+
+		// monitor simulation
+		go asyncMonitorSimulation(wgm, errChm, ctx, probeObjs, _nof_ro)
+
+		// wait for simulation to terminate
+		wgm.Wait()
+		// return the error if occured, otherwise send simulation task terminated
+		select {
+		case err := <-errCh:
+			errCh <- err
+		default:
+			wg.Done()
+		}
+		return
+
 	case my_types.SignalPerturbation:
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()

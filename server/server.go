@@ -126,6 +126,28 @@ func deserialize(rawData []byte) (map[string]interface{}, error) {
 
 }
 
+// Deserializes the received raw data using MessagePack
+func deserializeState(rawData []byte) ([]my_types.StateRecord, error) {
+
+	defer timeTrack(time.Now(), "deserializeState()")
+
+	data := make([]my_types.StateRecord, 0)
+	dec := msgpack.NewDecoder(bytes.NewReader(rawData))
+	err := dec.Decode(&data)
+	if err != nil {
+		log.Println("Decoding failed, error:", err)
+		return nil, err
+	} else {
+		log.Println("State Data deserialized")
+		if VERBOSE {
+			log.Println(data)
+		}
+	}
+
+	return data, nil
+
+}
+
 // Serializes a result using MessagePack
 func serialize(result my_types.OutputTrace) (*bytes.Buffer, error) {
 
@@ -196,7 +218,7 @@ func handleMonitoring(conn net.Conn) {
 	errCh := make(chan error, 1)
 	defer close(errCh)
 	// start non-interactive monitoring
-	go simulator.Start(my_types.Monitoring, rawTrajectory, errCh, nil, nil, wg)
+	go simulator.Start(my_types.Monitoring, rawTrajectory, errCh, nil, nil, nil, wg)
 	wg.Wait()
 	select {
 	case err = <-errCh:
@@ -209,6 +231,7 @@ func handleMonitoring(conn net.Conn) {
 }
 
 // Starts a falsification and sends the result back to the client
+// todo: compute falsification directly on the server
 func handleFalsification(conn net.Conn) {
 
 	defer conn.Close()
@@ -237,7 +260,7 @@ func handleFalsification(conn net.Conn) {
 	defer close(resCh)
 	// start non-interactive falsification
 	// todo: handle falsification on the server
-	go simulator.Start(my_types.Falsification, rawTrajectory, errCh, resCh, nil, wg)
+	go simulator.Start(my_types.Falsification, rawTrajectory, errCh, resCh, nil, nil, wg)
 	wg.Wait()
 	// check simulation result
 	select {
@@ -258,6 +281,101 @@ func handleFalsification(conn net.Conn) {
 				log.Println("Cannot send response to the client")
 			}
 		}
+	}
+}
+
+func readStatePerturbationFromNet(ctx context.Context, conn net.Conn, ch chan<- []my_types.StateRecord) {
+
+	for {
+		// read data from network
+		dataLen, rawData, err := getData(ctx, conn)
+		if err != nil {
+			return
+		}
+		_ = dataLen
+		// deserialize data (contains a vector named "time" to index data points)
+		if dataLen == 0 {
+			return
+		}
+		rawPerturbation, err := deserializeState(rawData)
+		if err != nil {
+			return
+		}
+		_ = rawPerturbation
+		// send ack to client
+		sendSimulationAck(conn, []byte("Perturbation received correctly"))
+		// send data to the injector via channel
+		ch <- rawPerturbation
+	}
+}
+
+func handleStatePerturbation(conn net.Conn) {
+
+	defer conn.Close()
+
+	lockServer()
+	defer unlockServer()
+
+	// read the input trace
+	dataLen, rawData, err := getData(context.Background(), conn)
+	if err != nil {
+		return
+	}
+	_ = dataLen
+
+	// deserialize data
+	rawTrajectory, err := deserialize(rawData)
+	if err != nil {
+		return
+	}
+
+	// wg for synchronization
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	// error channel to get potential error
+	errCh := make(chan error, 1)
+	defer close(errCh)
+	resCh := make(chan my_types.OutputTrace, 1)
+	defer close(resCh)
+	// create the perturbation communication channel
+	statePertCh := make(chan []my_types.StateRecord, 24*512) // 12 KB buffer
+	defer close(statePertCh)
+	// start the simulation (async)
+	go simulator.Start(my_types.StatePerturbation, rawTrajectory, errCh, resCh, nil, statePertCh, wg)
+	// helper to check simulation ended without blocking
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// start state perturbation network listener
+	go readStatePerturbationFromNet(ctx, conn, statePertCh)
+	// send an ack to the client (so the client can send the state perturbation...)
+	sendSimulationAck(conn, []byte("Simulation started"))
+simulateAndPerturbState:
+	for {
+		select {
+		case <-done:
+			log.Printf("Simulation ended, checking result...")
+			break simulateAndPerturbState
+		default:
+			log.Print("Keep waiting for the end of the simulation")
+			// listen and inject data
+			time.Sleep(3 * time.Second)
+		}
+	}
+	// check no errors occurred
+	select {
+	case err = <-errCh:
+		log.Println("Error occurred during signal perturbation:", err)
+		return
+	default:
+		// no error
+		log.Println("Simulation finished without errors")
+		sendSimulationAck(conn, []byte("Simulation ended without errors"))
+		return
 	}
 }
 
@@ -286,15 +404,6 @@ func readPerturbationFromNet(ctx context.Context, conn net.Conn, ch chan<- map[s
 	}
 }
 
-// todo: implement
-func handleStatePerturbation(conn net.Conn) {
-
-	defer conn.Close()
-	lockServer()
-	defer unlockServer()
-}
-
-// todo: implement
 func handleSignalPerturbation(conn net.Conn) {
 
 	defer conn.Close()
@@ -327,7 +436,7 @@ func handleSignalPerturbation(conn net.Conn) {
 	pertCh := make(chan map[string]interface{}, 1024*1024*64) // 32 MB buffer
 	defer close(pertCh)
 	// start the simulation (async)
-	go simulator.Start(my_types.SignalPerturbation, rawTrajectory, errCh, resCh, pertCh, wg)
+	go simulator.Start(my_types.SignalPerturbation, rawTrajectory, errCh, resCh, pertCh, nil, wg)
 	// helper to check simulation ended without blocking
 	done := make(chan struct{})
 	go func() {
@@ -340,12 +449,12 @@ func handleSignalPerturbation(conn net.Conn) {
 	go readPerturbationFromNet(ctx, conn, pertCh)
 	// send perturbation started ack to client (so client can send the perturbation...)
 	sendSimulationAck(conn, []byte("Simulation started"))
-simulateAndPerturb:
+simulateAndPerturbSignal:
 	for {
 		select {
 		case <-done:
 			log.Printf("Simulation ended, checking result...")
-			break simulateAndPerturb
+			break simulateAndPerturbSignal
 		default:
 			log.Print("Keep waiting for the end of the simulation")
 			// listen and inject data

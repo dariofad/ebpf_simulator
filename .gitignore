@@ -55,3 +55,6 @@ vmlinux.h
 
 # matlab autosave files
 *.asv
+
+# project notes
+notes.md

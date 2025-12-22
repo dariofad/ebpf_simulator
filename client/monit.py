@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
+from typing import Sized
+import argparse
+import demos_config
+import msgpack
 import socket
 import sys
-import argparse
-from typing import Sized
-import msgpack
-import demos_config
 
 PORT = 8080
 HOST = None

@@ -15,7 +15,7 @@ CONFIG = None
 def srv_connect(host: str, model: int, config: int) -> bytearray:
 
     # get the model-configuration-based trajectory 
-    demo_fname = f"M{model}_C{config}_trajectory"
+    demo_fname = f"monit_M{model}_C{config}_trajectory"
     demo_func = getattr(demos_config, demo_fname)
     trajectory = demo_func()
     # serialize the trajectory with msgpack

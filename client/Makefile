@@ -1,5 +1,6 @@
 M ?= 1
 C ?= 1
+HOST ?= 127.0.0.1
 
 .PHONY: monit fals sign state
 ONESHELL: monit fals sign state
@@ -20,20 +21,20 @@ list:
 
 monit:
 	cp ../simulator/M$(M)_C$(C)_config.json ../simulator/config.json && \
-		python3 monit.py 127.0.0.1 $(M) $(C)
+		python3 monit.py $(HOST) $(M) $(C)
 
 fals:
 	cp ../simulator/M$(M)_C$(C)_config.json ../simulator/config.json
-	python3 fals.py 127.0.0.1 $(M) $(C)
+	python3 fals.py $(HOST) $(M) $(C)
 
 sign:
 	cp ../simulator/M$(M)_C$(C)_config.json ../simulator/config.json
 	chmod +x ../simulator/_utils/list_signals.py
 	../simulator/_utils/list_signals.py < ../simulator/config.json
-	python3 sign.py 127.0.0.1 $(M) $(C)
+	python3 sign.py $(HOST) $(M) $(C)
 
 state:
 	cp ../simulator/M$(M)_C$(C)_config.json ../simulator/config.json
 	chmod +x ../simulator/_utils/list_signals.py
 	../simulator/_utils/list_signals.py < ../simulator/config.json
-	python3 state.py 127.0.0.1 $(M) $(C)
+	python3 state.py $(HOST) $(M) $(C)

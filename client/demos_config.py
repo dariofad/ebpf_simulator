@@ -58,3 +58,23 @@ def sign_M1_C4_perturbation(PERIOD=0, ITERNO=0) -> dict:
     perturbation["DREL"] = drel.tolist()
     perturbation["time"] = np.array(time_trace, dtype=np.int32).tolist()
     return perturbation
+
+def state_M2_C1_trajectory(CYCLES=0) -> dict:
+    X = np.array([10 + 0.0001 * (i + 1) for i in range(CYCLES)], dtype=np.float64)
+    Y = np.array([20 for _ in range(CYCLES)], dtype=np.float64)
+    trajectory = dict()
+    trajectory["X"] = X.tolist()
+    trajectory["Y"] = Y.tolist()
+    return trajectory
+
+def state_M2_C1_perturbation(PERIOD=0, ITERNO=0) -> dict:
+    TIME = np.uint32(5).item()
+    VALUE_SIZE = np.uint32(8).item()
+    ADDR = np.uint64(0x555555558040).item()
+    VALUE = np.uint64(50).item()
+    perturbation = dict()
+    perturbation["TIME"] = TIME
+    perturbation["VALUE_SIZE"] = VALUE_SIZE
+    perturbation["ADDR"] = ADDR
+    perturbation["VALUE"] = VALUE
+    return perturbation

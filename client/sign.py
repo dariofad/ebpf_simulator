@@ -53,7 +53,7 @@ def srv_connect(host: str, model: int, config: int) -> bytearray:
             demo_fname = f"sign_M{model}_C{config}_perturbation"
             demo_func = getattr(demos_config, demo_fname)
             perturbation = demo_func(PERIOD, ITERNO)
-            payload = msgpack.packb(perturbation)
+            payload = msgpack.packb([perturbation])
             if isinstance(payload, Sized):
                 sock.sendall(len(payload).to_bytes(4, 'big'))
                 sock.sendall(payload)

@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 
+from typing import Sized
+import argparse
+import demos_config
+import json
+import msgpack
+import numpy as np
+import random
 import socket
 import sys
-import argparse
-from typing import Sized
-import numpy as np
-import msgpack
-import random
 import time
 
+CYCLES : int = 0
+with open("../simulator/config.json", 'r', encoding='utf-8') as file:
+        CYCLES = int(json.load(file)["NOF_CYCLES"])
+INJECTIONS : int = 0
+
 PORT = 8082
-CYCLES = 20
-SLEEP_TIME = 1
-INJECTIONS = 2
+HOST = None
+MODEL = None
+CONFIG = None
 
-def srv_connect(host: str) -> bytearray:
+def srv_connect(host: str, model: int, config: int) -> bytearray:
 
-    X = np.array([10 + 0.0001 * (i + 1) for i in range(CYCLES)], dtype=np.float64)
-    Y = np.array([20 for _ in range(CYCLES)], dtype=np.float64)
-    trajectory = dict()
-    trajectory["X"] = X.tolist()
-    trajectory["Y"] = Y.tolist()
+    # get the model-configuration-based trajectory 
+    demo_fname = f"state_M{model}_C{config}_trajectory"
+    demo_func = getattr(demos_config, demo_fname)
+    trajectory = demo_func(CYCLES)
     payload = msgpack.packb(trajectory)    # prepare the trace
     try:
         # Create TCP socket
@@ -39,34 +45,21 @@ def srv_connect(host: str) -> bytearray:
         # wait for simulation started ack
         response = sock.recv(64)
         print(response.decode('utf-8'))
-        # Send a couple of perturbations
-        TIME_OFFSET = 0
-        for iterno in range(INJECTIONS):
-            # inject a perturbation
-            PERIOD = CYCLES // 2
-            TIME = np.uint32(0 if iterno == 0 else random.randint(PERIOD // 2, PERIOD)).item()
-            VALUE_SIZE = np.uint32(8).item()
-            ADDR = np.uint64(0x555555558040).item()
-            VALUE = np.uint64(50*(iterno+1)).item()
-            perturbation = dict()
-            perturbation["TIME"] = TIME
-            perturbation["VALUE_SIZE"] = VALUE_SIZE
-            perturbation["ADDR"] = ADDR
-            perturbation["VALUE"] = VALUE
-            payload = msgpack.packb([perturbation])
-            if isinstance(payload, Sized):
-                sock.sendall(len(payload).to_bytes(4, 'big'))
-                sock.sendall(payload)
-            else:
-                print("Error with payload type")
-                exit(1)
-            # wait for ack
-            response = sock.recv(64)
-            print(response.decode('utf-8'))
-            TIME_OFFSET += PERIOD
-            # random sleep (between 1 and 6 seconds)
-            time.sleep(random.randint(1, PERIOD // 2))
-        # wait for final response
+        # send a state perturbation
+        demo_fname = f"state_M{model}_C{config}_perturbation"
+        demo_func = getattr(demos_config, demo_fname)
+        perturbation = demo_func(None, None)
+        payload = msgpack.packb([perturbation])
+        if isinstance(payload, Sized):
+            sock.sendall(len(payload).to_bytes(4, 'big'))
+            sock.sendall(payload)
+        else:
+            print("Error with payload type")
+            exit(1)
+        # wait for ack
+        response = sock.recv(64)
+        print(response.decode('utf-8'))
+        # wait for the end of the simulation
         response = sock.recv(64)        
         # Close the socket
         sock.close()
@@ -83,10 +76,26 @@ def main():
         description="Connect to the simulation server via TCP",
     )
     parser.add_argument('host', help='Server hostname or IP address')
+    parser.add_argument('model', help='Model id')
+    parser.add_argument('config', help='Config id')        
     
     args = parser.parse_args()
+    HOST = args.host
+    MODEL = args.model
+    CONFIG = args.config
+
+    print(f"host:\t{HOST}")
+    print(f"model:\t{MODEL}")
+    print(f"config:\t{CONFIG}")
+
+    global INJECTIONS
+    INJECTIONS = 1 if int(MODEL) == 2 else None
+    print(f"cycles:\t{CYCLES}")
+    print(f"injections:\t{INJECTIONS}")
     
-    print(srv_connect(args.host).decode('utf-8'))
+    result = srv_connect(HOST, MODEL, CONFIG)
+    print(result.decode('utf-8'))
+
 
 if __name__ == "__main__":
     main()

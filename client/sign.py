@@ -3,24 +3,28 @@
 import socket
 import sys
 import argparse
+import demos_config
 from typing import Sized
 import numpy as np
 import msgpack
 import random
 import time
 
-PORT = 8083
 CYCLES = 20
 SLEEP_TIME = 1
 INJECTIONS = 2
 
-def srv_connect(host: str) -> bytearray:
+PORT = 8083
+HOST = None
+MODEL = None
+CONFIG = None
 
-    X = np.array([10 + 0.0001 * (i + 1) for i in range(CYCLES)], dtype=np.float64)
-    Y = np.array([20 for _ in range(CYCLES)], dtype=np.float64)
-    trajectory = dict()
-    trajectory["X"] = X.tolist()
-    trajectory["Y"] = Y.tolist()
+def srv_connect(host: str, model: int, config: int) -> bytearray:
+
+    # get the model-configuration-based trajectory 
+    demo_fname = f"sign_M{model}_C{config}_trajectory"
+    demo_func = getattr(demos_config, demo_fname)
+    trajectory = demo_func(CYCLES)
     payload = msgpack.packb(trajectory)    # prepare the trace
     try:
         # Create TCP socket
@@ -41,17 +45,13 @@ def srv_connect(host: str) -> bytearray:
         print(response.decode('utf-8'))
         # Send a couple of perturbations
         TIME_OFFSET = 0
-        for iterno in range(INJECTIONS):
+        for ITERNO in range(INJECTIONS):
             # inject a perturbation
             PERIOD = CYCLES // 2
-            X = np.array([0.001 * (i + 1) for i in range(PERIOD)], dtype=np.float64)
-            Y = np.array([0.02 for _ in range(PERIOD)], dtype=np.float64)
-            PERIOD_START = 0 if iterno == 0 else random.randint(0, PERIOD // 2)
-            time_trace = [PERIOD_START + i for i in range(PERIOD // 2)]
-            perturbation = dict()
-            perturbation["X"] = X.tolist()
-            perturbation["Y"] = Y.tolist()
-            perturbation["time"] = np.array(time_trace, dtype=np.uint32).tolist()
+            # get the model-configuration-based perturbation
+            demo_fname = f"sign_M{model}_C{config}_perturbation"
+            demo_func = getattr(demos_config, demo_fname)
+            perturbation = demo_func(PERIOD, ITERNO)
             payload = msgpack.packb(perturbation)
             if isinstance(payload, Sized):
                 sock.sendall(len(payload).to_bytes(4, 'big'))
@@ -82,10 +82,21 @@ def main():
         description="Connect to the simulation server via TCP",
     )
     parser.add_argument('host', help='Server hostname or IP address')
+    parser.add_argument('model', help='Model id')
+    parser.add_argument('config', help='Config id')        
     
     args = parser.parse_args()
+    HOST = args.host
+    MODEL = args.model
+    CONFIG = args.config
+
+    print(f"host:\t{HOST}")
+    print(f"model:\t{MODEL}")
+    print(f"config:\t{CONFIG}")
     
-    print(srv_connect(args.host).decode('utf-8'))
+    result = srv_connect(HOST, MODEL, CONFIG)
+
+    print(result.decode('utf-8'))
 
 if __name__ == "__main__":
     main()

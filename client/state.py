@@ -5,11 +5,8 @@ import argparse
 import demos_config
 import json
 import msgpack
-import numpy as np
-import random
 import socket
 import sys
-import time
 
 CYCLES : int = 0
 with open("../simulator/config.json", 'r', encoding='utf-8') as file:

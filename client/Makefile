@@ -14,6 +14,7 @@ list:
 	@echo 'LIST OF DEMOS AVAILABLE:'
 	@echo -e 'monit\tM=1 C=1 --- WI: [DREL], RO: [AEGO, VEGO]'
 	@echo -e 'monit\tM=2 C=2 --- RI: [X, Y], RO: [X, Y, RES, MOFFSET]'
+	@echo -e 'monit\tM=3 C=1 --- RO: [PANGLE, AF, CMODE]'
 	@echo -e 'fals\tM=1 C=1 --- WI: [DREL], RO: [AEGO, VEGO]'
 	@echo -e 'fals\tM=2 C=1 --- WI: [X, Y], RI: [X, Y], RO: [X, Y, RES, MOFFSET]'
 	@echo -e 'sign\tM=1 C=2 --- WI: [DREL], RO: [DREL, AEGO, VEGO]'

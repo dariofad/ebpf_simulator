@@ -7,6 +7,12 @@ def monit_M1_C1_trajectory() -> dict:
     trajectory["DREL"] = drel.tolist()
     return trajectory
 
+def monit_M3_C1_trajectory() -> dict:
+    pangle = np.array([float(i)/100000 for i in range(1001)], dtype=np.float64)
+    trajectory = dict()
+    trajectory["PANGLE"] = pangle.tolist()
+    return trajectory
+
 def monit_M2_C2_trajectory() -> dict:
     trajectory = dict()
     return trajectory

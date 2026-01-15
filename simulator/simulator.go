@@ -491,7 +491,6 @@ func Start(
 			//log.Printf("values %v", values)
 			outSignals.Signals = append(outSignals.Signals, signTrace)
 		}
-		//log.Printf("outsignals %v", outSignals)
 		resCh <- outSignals
 	case my_types.StatePerturbation:
 		ctx, cancel := context.WithCancel(context.Background())
@@ -625,6 +624,7 @@ func Start(
 						for _, v := range r.Values {
 							binary.Write(tempFile, binary.LittleEndian, math.Float64bits(v))
 						}
+
 					}
 
 					// call the injector
@@ -757,7 +757,7 @@ func extractPerturbationRecords(data map[string]interface{}, simData my_types.Si
 				record.Values[signal_pos] = vals[p]
 			} else {
 				// append zero
-				record.Values = append(record.Values, 0)
+				record.Values[signal_pos] = 0
 			}
 		}
 		pertRecords = append(pertRecords, record)

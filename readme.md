@@ -32,7 +32,7 @@ After, install:
 - Linux headers files `sudo apt install linux-headers-generic`, `sudo ln -sf /usr/include/asm-generic/ /usr/include/asm`
 - eBPF headers `sudo apt install libbpf-dev`
 
-### Code style
+## Code style
 
 After cloning the repository run `git config --local core.hooksPath
 githooks`. This enables a script to format C source files with clangd
@@ -49,7 +49,7 @@ is also possible to interact with the server using a Matlab session
 [here](https://github.com/shincyou0916/Falsification-for-MPCACC-model-with-eBPF)
 for some code examples).
 
-### Build and run the server
+## Build and run the server
 
 - Create the redis container with `make redis` (only the first time)
 - Build and run the server with `make`

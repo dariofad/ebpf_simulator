@@ -41,9 +41,9 @@ for c, case in enumerate(CASES):
             ow_drel[c].append(float(line[2]))
             phi[c].append(float(line[3]))            
 
-    axs[c].plot(times[c], real_drel[c], label="Real distance", linestyle='--', linewidth=3, color='black')
+    axs[c].plot(times[c], real_drel[c], label="Real drel", linestyle='--', linewidth=3, color='black')
     if c != 0:
-        axs[c].plot(times[c], ow_drel[c], label="Injected distance", linestyle=':', linewidth=3, color='red')
+        axs[c].plot(times[c], ow_drel[c], label="Perturbed drel", linestyle=':', linewidth=3, color='red')
     axs[c].text(220, 2, 'unsafe area', ha='center', va='center', fontsize=16, color='black')
     rect = patches.Rectangle(
         (0,0),
@@ -63,8 +63,8 @@ for c, case in enumerate(CASES):
     axs[c].set_ylabel("Vehicle distance")
     axs[c].set_xlabel("Loop iteration")
     axs[c].set_title(TITLES[c])
-    if c == 0:
-        h, l = axs[0].get_legend_handles_labels()
+    if c == 1:
+        h, l = axs[1].get_legend_handles_labels()
         handles.extend(h)
         labels.extend(l)
     if c == 2:

@@ -46,16 +46,17 @@ def srv_connect(host: str, model: int, config: int) -> bytearray:
         demo_fname = f"state_M{model}_C{config}_perturbation"
         demo_func = getattr(demos_config, demo_fname)
         perturbations = demo_func(None, None)
-        payload = msgpack.packb(perturbations)
-        if isinstance(payload, Sized):
-            sock.sendall(len(payload).to_bytes(4, 'big'))
-            sock.sendall(payload)
-        else:
-            print("Error with payload type")
-            exit(1)
-        # wait for ack
-        response = sock.recv(64)
-        print(response.decode('utf-8'))
+        if perturbations is not None:
+                payload = msgpack.packb(perturbations)
+                if isinstance(payload, Sized):
+                        sock.sendall(len(payload).to_bytes(4, 'big'))
+                        sock.sendall(payload)
+                else:
+                        print("Error with payload type")
+                        exit(1)
+                # wait for ack
+                response = sock.recv(64)
+                print(response.decode('utf-8'))
         # wait for the end of the simulation
         response = sock.recv(64)        
         # Close the socket

@@ -112,23 +112,24 @@ def state_M2_C1_perturbation(PERIOD=0, ITERNO=0) -> list:
     return [perturbation]
 
 def state_M3_C3_trajectory(CYCLES=0) -> dict:
-    pangle = np.array([float(i)/100000 for i in range(CYCLES)], dtype=np.float64)
-    rpm = np.array([float(i)/100000 for i in range(CYCLES)], dtype=np.float64)    
+    pangle = np.array([0.0 for i in range(CYCLES)], dtype=np.float64)
+    rpm = np.array([0.0 for i in range(CYCLES)], dtype=np.float64)    
     trajectory = dict()
     trajectory["PANGLE"] = pangle.tolist()
     trajectory["RPM"] = rpm.tolist()    
     return trajectory
 
-def state_M3_C3_perturbation(PERIOD=0, ITERNO=0) -> list:
-    TIME = np.uint32(900).item()
+def state_M3_C3_perturbation(PERIOD=0, ITERNO=0) -> list | None:
+    TIME = np.uint32(50).item()
     VALUE_SIZE = np.uint32(8).item()
     ADDR = np.uint64(0x5555555682b0).item()
-    VALUE = np.float64(6.6).item()
+    VALUE = np.float64(16).item()
     perturbation = dict()
     perturbation["TIME"] = TIME
     perturbation["VALUE_SIZE"] = VALUE_SIZE
     perturbation["ADDR"] = ADDR
     perturbation["VALUE"] = VALUE
+#    return None    
     return [perturbation]
 
 def state_M1_C3_trajectory(CYCLES=0) -> dict:

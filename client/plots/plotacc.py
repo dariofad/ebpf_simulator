@@ -19,9 +19,9 @@ signals = {
 
 plt.rcParams.update({'font.size': 16})
 
-CASES = ["normal.csv", "acc.csv", "brk.csv"]
+CASES = ["normal.csv", "acc.csv"] #, "brk.csv"]
 TITLES = ["Normal execution", "Adversarial attack", "Runtime enforcement"]
-fig, axs = plt.subplots(1, 3, figsize=(15, 4))
+fig, axs = plt.subplots(1, 2, figsize=(11.5, 4))
 handles, labels = [], []
 times = []
 real_drel = []

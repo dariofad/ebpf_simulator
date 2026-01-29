@@ -99,7 +99,7 @@ def state_M2_C1_trajectory(CYCLES=0) -> dict:
     trajectory["Y"] = Y.tolist()
     return trajectory
 
-def state_M2_C1_perturbation(PERIOD=0, ITERNO=0) -> dict:
+def state_M2_C1_perturbation(PERIOD=0, ITERNO=0) -> list:
     TIME = np.uint32(5).item()
     VALUE_SIZE = np.uint32(8).item()
     ADDR = np.uint64(0x555555558040).item()
@@ -109,7 +109,7 @@ def state_M2_C1_perturbation(PERIOD=0, ITERNO=0) -> dict:
     perturbation["VALUE_SIZE"] = VALUE_SIZE
     perturbation["ADDR"] = ADDR
     perturbation["VALUE"] = VALUE
-    return perturbation
+    return [perturbation]
 
 def state_M3_C3_trajectory(CYCLES=0) -> dict:
     pangle = np.array([float(i)/100000 for i in range(CYCLES)], dtype=np.float64)
@@ -119,7 +119,7 @@ def state_M3_C3_trajectory(CYCLES=0) -> dict:
     trajectory["RPM"] = rpm.tolist()    
     return trajectory
 
-def state_M3_C3_perturbation(PERIOD=0, ITERNO=0) -> dict:
+def state_M3_C3_perturbation(PERIOD=0, ITERNO=0) -> list:
     TIME = np.uint32(900).item()
     VALUE_SIZE = np.uint32(8).item()
     ADDR = np.uint64(0x5555555682b0).item()
@@ -129,4 +129,31 @@ def state_M3_C3_perturbation(PERIOD=0, ITERNO=0) -> dict:
     perturbation["VALUE_SIZE"] = VALUE_SIZE
     perturbation["ADDR"] = ADDR
     perturbation["VALUE"] = VALUE
-    return perturbation
+    return [perturbation]
+
+def state_M1_C3_trajectory(CYCLES=0) -> dict:
+    drel = np.array([0 for i in range(451)], dtype=np.float64)
+    trajectory = dict()
+    trajectory["DREL"] = drel.tolist()
+    return trajectory
+
+def state_M1_C3_perturbation(PERIOD=0, ITERNO=0) -> list:
+    VALUE_SIZE = np.uint32(8).item()
+    ADDR = np.uint64(0x55555556e350).item()
+    perturbations = []
+    for i in range(30):
+        TIME = np.uint32(300+i).item()
+        VALUE = np.float64(25).item()
+#        VALUE = np.float64(75).item()                
+        perturbation = dict()
+        perturbation["TIME"] = TIME
+        perturbation["VALUE_SIZE"] = VALUE_SIZE
+        perturbation["ADDR"] = ADDR
+        perturbation["VALUE"] = VALUE
+        perturbations.append(perturbation)
+#    return perturbations        
+    return []        
+
+
+
+

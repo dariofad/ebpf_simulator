@@ -45,8 +45,8 @@ def srv_connect(host: str, model: int, config: int) -> bytearray:
         # send a state perturbation
         demo_fname = f"state_M{model}_C{config}_perturbation"
         demo_func = getattr(demos_config, demo_fname)
-        perturbation = demo_func(None, None)
-        payload = msgpack.packb([perturbation])
+        perturbations = demo_func(None, None)
+        payload = msgpack.packb(perturbations)
         if isinstance(payload, Sized):
             sock.sendall(len(payload).to_bytes(4, 'big'))
             sock.sendall(payload)

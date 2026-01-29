@@ -6,3 +6,5 @@ pyright==1.1.407
 pysort==1.0.0
 typing_extensions==4.15.0
 yapf==0.43.0
+redis==7.1.0
+matplotlib==3.10.8

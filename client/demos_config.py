@@ -155,5 +155,21 @@ def state_M1_C3_perturbation(PERIOD=0, ITERNO=0) -> list:
     return []        
 
 
+def sign_M3_C4_trajectory(CYCLES=0) -> dict:
+    pangle = np.array([0.0 for _ in range(CYCLES)], dtype=np.float64)
+    trajectory = dict()
+    trajectory["PANGLE"] = pangle.tolist()
+    return trajectory
+
+def sign_M3_C4_perturbation(PERIOD=0, ITERNO=0) -> dict | None:
+    l = [float(i)/30 for i in range(450)]
+    pangle = np.array(l, dtype=np.float64)
+    PERIOD_START = 50
+    time_trace = [PERIOD_START + i for i in range(450)]
+    perturbation = dict()
+    perturbation["PANGLE"] = pangle.tolist()
+    perturbation["time"] = np.array(time_trace, dtype=np.int32).tolist()
+    return perturbation
+#return None
 
 

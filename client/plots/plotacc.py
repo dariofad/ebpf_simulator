@@ -60,7 +60,7 @@ for c, case in enumerate(CASES):
     axs[c].plot(times[c], phi[c], color='blue', linewidth=3, label="CPS safety according to φ")
     axs[c].autoscale(axis='x', tight=True)
     axs[c].set_ylim(0, 90)
-    axs[c].set_ylabel("Vehicle distance")
+    axs[c].set_ylabel("Vehicle distance [m]")
     axs[c].set_xlabel("Loop iteration")
     axs[c].set_title(TITLES[c])
     if c == 1:

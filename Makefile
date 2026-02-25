@@ -5,6 +5,9 @@ GO_MODULE = ebpf_simulator
 SIMULATOR_PATH := simulator
 REDIS_PORT := 6379
 
+BPF_CFLAGS  = -DDEBUG -O2 -Wall
+BPF_CFLAGS_BENCH  = -O2 -Wall
+
 all: run
 
 vmlinux:
@@ -12,7 +15,9 @@ vmlinux:
 	bpftool btf dump file /sys/kernel/btf/vmlinux format c > $(SIMULATOR_PATH)/headers/vmlinux.h
 
 generate: vmlinux
-	cd $(SIMULATOR_PATH); go generate
+	cd $(SIMULATOR_PATH); BPF2GO_CFLAGS="$(BPF_CFLAGS)" go generate
+generate_bench: vmlinux
+	cd $(SIMULATOR_PATH); BPF2GO_CFLAGS="$(BPF_CFLAGS_BENCH)" go generate
 
 pert_injector:
 	gcc -Wall -O2 -o $(SIMULATOR_PATH)/injector $(SIMULATOR_PATH)/injector.c -lbpf; \
@@ -24,6 +29,8 @@ state_pert_injector:
 
 build: generate pert_injector state_pert_injector
 # with CGO_ENABLED=0 the build doesn't depend on libc
+	@CGO_ENABLED=0 GO_ARCH=amd64 go build
+build_bench: generate_bench pert_injector state_pert_injector
 	@CGO_ENABLED=0 GO_ARCH=amd64 go build
 
 redis:
@@ -38,7 +45,7 @@ stop_redis:
 aslr_off:
 	echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
 
-_run: | aslr_off build start_redis
+_run: | aslr_off start_redis
 	sudo su -c 'rm -rf /sys/fs/bpf/inner*'
 	sudo su -c 'rm -rf /sys/fs/bpf/pertbuf*'
 	sudo su -c 'rm -rf /sys/fs/bpf/state_pertbuf*'
@@ -50,10 +57,13 @@ _run: | aslr_off build start_redis
 		sleep 3; \
 	fi
 
-run: _run
+_run_debug: | build _run 
+_run_bench: | build_bench _run
+
+run: _run_debug
 	@sudo ./$(GO_MODULE)
 
-bench: _run
+bench: _run_bench
 	sudo sysctl -w kernel.bpf_stats_enabled=1
 	@sudo ./$(GO_MODULE) -b
 

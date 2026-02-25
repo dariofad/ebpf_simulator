@@ -8,6 +8,14 @@
 
 #define DRAIN_SINGLE_POINT 1
 
+#ifdef DEBUG
+#define DEBUG_P(fmt, ...) bpf_printk(fmt, ##__VA_ARGS__)
+#else
+#define DEBUG_P(...)                                                                               \
+        do {                                                                                       \
+        } while (0)
+#endif
+
 const __u32 MAX_NOF_SIGNALS = 16;
 
 // interactivity
@@ -175,21 +183,21 @@ static __u64 ieee754_add(__u64 a, __u64 b) {
         // determine the large and small number
         bool a_l = (e_a > e_b) || ((e_a == e_b) && (m_a > m_b));
         __u64 e_l, e_s, m_l, m_s;
-        __u64 s_l, s_s;
+        __u64 s_l; // , s_s;
         if (a_l) {
                 e_l = e_a;
                 m_l = m_a;
                 s_l = s_a;
                 e_s = e_b;
                 m_s = m_b;
-                s_s = s_b;
+                //                s_s = s_b;
         } else {
                 e_l = e_b;
                 m_l = m_b;
                 s_l = s_b;
                 e_s = e_a;
                 m_s = m_a;
-                s_s = s_a;
+                //                s_s = s_a;
         }
 
         // align the two mantissa to perform the operation
@@ -219,7 +227,7 @@ static __u64 ieee754_add(__u64 a, __u64 b) {
 
         // overflow occurred
         if (e_res > 2046 || e_res < 0) {
-                bpf_printk("\tERR: OP RESULTED IN OVERFLOW");
+                DEBUG_P("\tERR: OP RESULTED IN OVERFLOW");
                 return 0ULL;
         }
 
@@ -244,12 +252,12 @@ static __u64 ieee754_add(__u64 a, __u64 b) {
         return result;
 }
 
-static __u64 ieee754_sub(__u64 a, __u64 b) {
+/* static __u64 ieee754_sub(__u64 a, __u64 b) { */
 
-        // flip sign and do an addition
-        b ^= (1ULL << 63);
-        return ieee754_add(a, b);
-}
+/*         // flip sign and do an addition */
+/*         b ^= (1ULL << 63); */
+/*         return ieee754_add(a, b); */
+/* } */
 
 struct i_loop_ctx {
         __u32 time;
@@ -263,25 +271,25 @@ static long inj_signals(u64 index, void *_ctx) {
 
         void *sign_trace = bpf_map_lookup_elem(&tracee_map, &skey);
         if (!sign_trace) {
-                bpf_printk("\tERR retrieving sign_trace map");
+                DEBUG_P("\tERR retrieving sign_trace map");
                 return 1;
         }
 
         // get the perturbation value
         __u64 *pert = bpf_map_lookup_elem(sign_trace, &(ctx->time));
         if (!pert) {
-                bpf_printk("\tERR retrieving the signal trace (urb draining)");
+                DEBUG_P("\tERR retrieving the signal trace (urb draining)");
                 return 1;
         } else {
                 // add injected value to initial perturbation
-                bpf_printk("\tsign_key %d, initial: %llu, added: %llu", skey, *pert, ctx->inj_pert);
+                DEBUG_P("\tsign_key %d, initial: %llu, added: %llu", skey, *pert, ctx->inj_pert);
                 ctx->inj_pert = ieee754_add(ctx->inj_pert, *pert);
                 int err = bpf_map_update_elem(sign_trace, &(ctx->time), &(ctx->inj_pert), BPF_ANY);
                 if (err != 0) {
-                        bpf_printk("\t\t-> failed injection, ERR: %d", err);
+                        DEBUG_P("\t\t-> failed injection, ERR: %d", err);
                         return 1;
                 } else {
-                        bpf_printk("\t\t-> successful injection");
+                        DEBUG_P("\t\t-> successful injection");
                 }
         }
 
@@ -295,7 +303,6 @@ static long extract_injected_pert(struct bpf_dynptr *dynptr, __u32 *_nof_pert_si
         if (!DRAINED_RECORD) {
                 return 0;
         }
-        __u32 thr = *_nof_pert_signals;
 
         struct i_loop_ctx ctx = {
             .time = DRAINED_RECORD->time,
@@ -346,10 +353,10 @@ static long extract_injected_state_pert(struct bpf_dynptr *dynptr, __u32 placeho
         // transfer the state record to a map
         int err = bpf_map_update_elem(&state_trace, &DRAINED_RECORD->time, &srt, BPF_ANY);
         if (err != 0) {
-                bpf_printk("\tERR: cannot save the state perturbation at time %d",
-                           DRAINED_RECORD->time);
+                DEBUG_P("\tERR: cannot save the state perturbation at time %d",
+                        DRAINED_RECORD->time);
         } else {
-                bpf_printk("\t-> saved value: %llu (address: %llu)", srt.value, srt.addr);
+                DEBUG_P("\t-> saved value: %llu (address: %llu)", srt.value, srt.addr);
         }
 
         return DRAIN_SINGLE_POINT;
@@ -367,8 +374,8 @@ int uprobe_timer() {
         }
         minor_step++;
         if (time > MAX_CYCLES) {
-                bpf_printk("\tLOGGED %d RECORDS", log_counter - 1);
-                bpf_printk("\tSIGKILL SENT TO PROCESS");
+                DEBUG_P("\tLOGGED %d RECORDS", log_counter - 1);
+                DEBUG_P("\tSIGKILL SENT TO PROCESS");
                 bpf_send_signal(SIGKILL);
                 return 0;
         }
@@ -379,16 +386,16 @@ static inline int copy_user_space_value_to_map(__u32 actual_time, __u32 key, __u
 
         struct m_signal *sign_trace = (struct m_signal *)bpf_map_lookup_elem(&tracee_map, &key);
         if (sign_trace == NULL) {
-                bpf_printk("\tERR retrieving sign_trace map");
+                DEBUG_P("\tERR retrieving sign_trace map");
                 return -1;
         }
         // update the signal trace
         int err = bpf_map_update_elem(sign_trace, &actual_time, &signal, BPF_ANY);
         if (err != 0) {
-                bpf_printk("\tERR, cannot copy value of sign_key %d to trace", key);
+                DEBUG_P("\tERR, cannot copy value of sign_key %d to trace", key);
                 return -1;
         } else {
-                bpf_printk("\t\t-> value copied to trace");
+                DEBUG_P("\t\t-> value copied to trace");
         }
         return 0;
 }
@@ -396,7 +403,7 @@ static inline int copy_user_space_value_to_map(__u32 actual_time, __u32 key, __u
 static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUTPUT) {
 
         if (nof_signals > MAX_NOF_SIGNALS) {
-                bpf_printk("\tERR, too many signals to read");
+                DEBUG_P("\tERR, too many signals to read");
                 return -1;
         }
 
@@ -422,7 +429,7 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
         stash[14] = 0;
         stash[15] = 0;
 
-        bpf_printk("\tnof signals to read: %d", nof_signals);
+        DEBUG_P("\tnof signals to read: %d", nof_signals);
         for (__u32 k = 0; k < MAX_NOF_SIGNALS; k++) {
                 if (k >= nof_signals)
                         break;
@@ -430,16 +437,16 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
                 // get the signal address
                 __u64 *address = bpf_map_lookup_elem(&address_map, &key);
                 if (!address) {
-                        bpf_printk("\tERR retrieving address from address_map");
+                        DEBUG_P("\tERR retrieving address from address_map");
                         return -1;
                 }
                 // read the signal from user space
                 __u64 signal = 0;
                 if (bpf_probe_read_user(&signal, sizeof(signal), (void *)(*address)) == 0) {
-                        bpf_printk("\tsign_key %d from user space: %llu (address: %llu)", key,
-                                   signal, *address);
+                        DEBUG_P("\tsign_key %d from user space: %llu (address: %llu)", key, signal,
+                                *address);
                 } else {
-                        bpf_printk("\tERR, failed to read signal");
+                        DEBUG_P("\tERR, failed to read signal");
                         return -1;
                 }
                 if (INTERACTIVE == 0 || IS_OUTPUT == 0) {
@@ -454,7 +461,7 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
                 r = bpf_ringbuf_reserve(
                     &out_rb, sizeof(struct model_record) + nof_signals * sizeof(__u64), 0);
                 if (r == NULL) {
-                        bpf_printk("\tERR, failed to reserve rb memory");
+                        DEBUG_P("\tERR, failed to reserve rb memory");
                         return -1;
                 }
                 r->time   = actual_time;
@@ -468,7 +475,7 @@ static inline int read_signals(__u32 nof_signals, __u32 key_offset, __u16 IS_OUT
                 }
                 // commit to the rb
                 bpf_ringbuf_submit(r, BPF_RB_NO_WAKEUP);
-                bpf_printk("\t\t-> output record committed to the ring buffer");
+                DEBUG_P("\t\t-> output record committed to the ring buffer");
         }
         return 0;
 }
@@ -480,7 +487,7 @@ int uprobe_read_i() {
                 return 0;
         } else {
                 __u32 actual_time = time - 1;
-                bpf_printk("READ_INPUT, time: %d", actual_time);
+                DEBUG_P("READ_INPUT, time: %d", actual_time);
                 return read_signals(NOF_RISIGNALS, NOF_WISIGNALS, 0);
         }
 }
@@ -492,7 +499,7 @@ int uprobe_read_o() {
                 return 0;
         } else {
                 __u32 actual_time = time - 1;
-                bpf_printk("READ_OUTPUT, time: %d", actual_time);
+                DEBUG_P("READ_OUTPUT, time: %d", actual_time);
                 log_counter += 1;
                 return read_signals(NOF_ROSIGNALS, NOF_WISIGNALS + NOF_RISIGNALS, 1);
         }
@@ -510,31 +517,31 @@ static long write_signals(u64 index, void *_ctx) {
         // get the signal trace
         void *sign_trace = bpf_map_lookup_elem(&tracee_map, &skey);
         if (!sign_trace) {
-                bpf_printk("\tERR retrieving sign_trace map");
+                DEBUG_P("\tERR retrieving sign_trace map");
                 return 1;
         }
         // get the perturbation value
         __u64 *pert = bpf_map_lookup_elem(sign_trace, &(ctx->actual_time));
         if (!pert) {
-                bpf_printk("\tERR reading sign_key %d pert", skey);
+                DEBUG_P("\tERR reading sign_key %d pert", skey);
                 return 1;
         } else {
-                bpf_printk("\tsign_key %d pert: %llu", skey, *pert);
+                DEBUG_P("\tsign_key %d pert: %llu", skey, *pert);
         }
 
         // get the signal address
         __u64 *address = bpf_map_lookup_elem(&address_map, &skey);
         if (!address) {
-                bpf_printk("\tERR retrieving address from address_map");
+                DEBUG_P("\tERR retrieving address from address_map");
                 return 1;
         }
 
         // read the signal from user space
         __u64 sign = 0;
         if (bpf_probe_read_user(&sign, sizeof(sign), (void *)(*address)) == 0) {
-                bpf_printk("\tsign_key %d from user space: %llu", skey, sign);
+                DEBUG_P("\tsign_key %d from user space: %llu", skey, sign);
         } else {
-                bpf_printk("\tERR, failed to read sign_key %d from user space", skey);
+                DEBUG_P("\tERR, failed to read sign_key %d from user space", skey);
                 return 1;
         }
 
@@ -544,11 +551,10 @@ static long write_signals(u64 index, void *_ctx) {
         // overwrite signal in user space
         long err = bpf_probe_write_user((void *)(*address), &sign, 8);
         if (err != 0) {
-                bpf_printk("\tERR, failed to overwrite signal %k in user space, err: %ld", skey,
-                           err);
+                DEBUG_P("\tERR, failed to overwrite signal %k in user space, err: %ld", skey, err);
                 return 1;
         } else {
-                bpf_printk("\t\t-> new user space value set to: %llu", sign);
+                DEBUG_P("\t\t-> new user space value set to: %llu", sign);
         }
 
         return 0;
@@ -561,7 +567,7 @@ int uprobe_write_i() {
                 return 0;
         } else {
                 if (NOF_WISIGNALS > 8) { // hardcoded
-                        bpf_printk("\tERR, too many signals to write");
+                        DEBUG_P("\tERR, too many signals to write");
                         return -1;
                 }
 
@@ -576,24 +582,24 @@ int uprobe_write_i() {
                 bpf_user_ringbuf_drain(&inj_rb, extract_injected_pert, &_nof_pert_signals, 0);
 
                 // write perturbations to user space
-                bpf_printk("WRITE, time: %d, nof signals to perturbate: %d", actual_time,
-                           NOF_WISIGNALS);
+                DEBUG_P("WRITE, time: %d, nof signals to perturbate: %d", actual_time,
+                        NOF_WISIGNALS);
                 // write state perturbation to user space
                 // state
                 struct state_record_trimmed *srt = bpf_map_lookup_elem(&state_trace, &actual_time);
                 if (srt == 0) {
-                        bpf_printk("-> no state perturbation applicable");
+                        DEBUG_P("-> no state perturbation applicable");
                 } else {
                         // write state perturbation to user space
                         long err = bpf_probe_write_user((void *)(srt->addr), &(srt->value), 8);
                         if (err != 0) {
-                                bpf_printk("\tERR, failed to write state perturbation to user "
-                                           "space, err: %d",
-                                           err);
+                                DEBUG_P("\tERR, failed to write state perturbation to user "
+                                        "space, err: %d",
+                                        err);
                         } else {
-                                bpf_printk("-> used state perturbation, "
-                                           "value: %llu (address: %llu)",
-                                           srt->value, srt->addr);
+                                DEBUG_P("-> used state perturbation, "
+                                        "value: %llu (address: %llu)",
+                                        srt->value, srt->addr);
                         }
                 }
                 // signals

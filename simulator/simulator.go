@@ -429,6 +429,9 @@ func Start(
 	binCmd.Stderr = os.Stderr
 	// Start the command
 	log.Print("Starting simulation")
+	// Start measuring simulation time
+	simulationStartTime := time.Now()
+
 	if err := binCmd.Start(); err != nil {
 		log.Printf("Failed to start simulation command: %s", err)
 		errCh <- err
@@ -460,7 +463,7 @@ func Start(
 		if err := monitorSimulation(ctx, probeObjs, _nof_ro); err != nil {
 			errCh <- err
 			wg.Done()
-			stopSimulator()
+			stopSimulator(simulationStartTime, _nof_wi, _nof_ri, _nof_ro, simData)
 			return
 		}
 	case my_types.Falsification:
@@ -487,7 +490,7 @@ func Start(
 					log.Printf("Trace lookup failed: %s\n", err)
 					errCh <- err
 					wg.Done()
-					stopSimulator()
+					stopSimulator(simulationStartTime, _nof_wi, _nof_ri, _nof_ro, simData)
 					return
 				}
 			}
@@ -511,7 +514,7 @@ func Start(
 			log.Printf("Cannot pin state perturbation buffer at %v", pertRBPath)
 			errCh <- err
 			wg.Done()
-			stopSimulator()
+			stopSimulator(simulationStartTime, _nof_wi, _nof_ri, _nof_ro, simData)
 			return
 		}
 		// defer unpinnning
@@ -577,7 +580,7 @@ func Start(
 		default:
 			wg.Done()
 		}
-		stopSimulator()
+		stopSimulator(simulationStartTime, _nof_wi, _nof_ri, _nof_ro, simData)
 		return
 
 	case my_types.SignalPerturbation:
@@ -595,7 +598,7 @@ func Start(
 			log.Printf("Cannot pin perturbation buffer at %v", pertRBPath)
 			errCh <- err
 			wg.Done()
-			stopSimulator()
+			stopSimulator(simulationStartTime, _nof_wi, _nof_ri, _nof_ro, simData)
 			return
 		}
 		// defer unpinnning
@@ -669,17 +672,36 @@ func Start(
 			wg.Done()
 		}
 
-		stopSimulator()
+		stopSimulator(simulationStartTime, _nof_wi, _nof_ri, _nof_ro, simData)
 		return
 	}
 
 	// terminate
 	wg.Done()
-	stopSimulator()
+	stopSimulator(simulationStartTime, _nof_wi, _nof_ri, _nof_ro, simData)
 	return
 }
 
-func stopSimulator() {
+func stopSimulator(simulationStartTime time.Time, _nof_wi, _nof_ri, _nof_ro uint32, simData my_types.SimFormat) {
+
+	elapsedTime := time.Since(simulationStartTime)
+	statsFName := "_stats.csv"
+	file, err := os.OpenFile(statsFName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+	logLine := simData.ModelPath + "," +
+		simData.NofCycles + "," +
+		simData.MinorToMajorRatio + "," +
+		strconv.FormatUint(uint64(_nof_wi), 10) + "," +
+		strconv.FormatUint(uint64(_nof_ri), 10) + "," +
+		strconv.FormatUint(uint64(_nof_ro), 10) + "," +
+		strconv.FormatInt(elapsedTime.Nanoseconds(), 10)
+
+	if _, err := file.WriteString(logLine); err != nil {
+		log.Printf("Error writing stats line: %s", err)
+	}
 
 	if BENCH {
 		var line string

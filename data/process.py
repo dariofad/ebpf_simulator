@@ -61,7 +61,7 @@ def parse_stats(filename: str, configuration: str) -> (Dict, Dict):
     return (config, stats)
 
 def print_stats(config:dict, stats: dict):
-    for up in maps:
+    for up in sorted(maps):
         print("---")
         if not stats.get(up, False):
             print(f"{up} not loaded")

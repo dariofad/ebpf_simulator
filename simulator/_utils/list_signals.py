@@ -31,6 +31,8 @@ if READ_TIMING_O:
     NOF_RO = len(READ_TIMING_O["SIGNALS"])        
 
 print("SIGNAL RECAP:")
+if not TABLE.keys():
+    exit()
 max_sign_name_len = max([len(n) for n in TABLE.keys()]) + 1
 for sign_name in TABLE.keys():
     snames = str(TABLE[sign_name])
